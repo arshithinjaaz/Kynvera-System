@@ -437,6 +437,50 @@ class TestTicketingClickins:
         assert html.count('>Back<') + html.count('>Back </') >= 0
         assert 'Email drafts' in html
 
+    def test_draft_review_uses_split_layout(self, client, app, admin_user, admin_auth_headers):
+        with app.app_context():
+            t = Ticket(
+                ticket_id='TKT-DRAFTUI',
+                reporter_id=admin_user.id,
+                title='Electrical issue',
+                project='Unassigned',
+                service_group='Unclassified',
+                category='Tower A',
+                fault_type='Unclassified',
+                priority='medium',
+                work_description='Electrical Issue',
+                status='draft',
+                source='email',
+                source_sender_name='Kynvera',
+                source_sender_email='support@kynvera.store',
+                source_subject='Tower A - Electrical issue',
+                property_name='Tower A',
+                zone='Ground Floor',
+                base_unit='Shop 4',
+            )
+            db.session.add(t)
+            db.session.commit()
+        try:
+            res = client.get('/tickets/drafts/TKT-DRAFTUI/review', headers=admin_auth_headers)
+            assert res.status_code == 200
+            html = res.get_data(as_text=True)
+            assert 'tkt-draft-review-page' in html
+            assert 'tkt-draft-mail' in html
+            assert 'Convert to work order' in html
+            assert 'Original email' in html
+            assert 'tktNewForm' in html
+            assert 'Live Summary' in html
+            assert 'Find project' in html
+            assert 'Ready to convert' in html
+            assert 'Ticket Details' not in html
+            assert 'window.TKT_DRAFT_SEED' in html
+        finally:
+            with app.app_context():
+                leftover = Ticket.query.filter_by(ticket_id='TKT-DRAFTUI').first()
+                if leftover:
+                    db.session.delete(leftover)
+                    db.session.commit()
+
     def test_new_work_order_has_no_settings_header(self, client, admin_auth_headers):
         res = client.get('/tickets/new', headers=admin_auth_headers)
         assert res.status_code == 200

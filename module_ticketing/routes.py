@@ -1433,10 +1433,86 @@ def draft_tickets():
 
     drafts = _draft_tickets_query().order_by(Ticket.created_at.desc()).all()
 
+    # ── Email intake history: every inbound email, converted or not, so
+    # supervisors can see the whole received → converted funnel instead of
+    # just whatever's still sitting in the pending-review queue above.
+    # Ticket rows don't remember "this came from a draft" once converted,
+    # so TicketEmailIntake (one row per webhook/poller call, see
+    # _process_inbound_email_intake) is the only place that history lives.
+    status_filter = (request.args.get('status') or 'all').strip().lower()
+    date_from_raw = (request.args.get('date_from') or '').strip()
+    date_to_raw = (request.args.get('date_to') or '').strip()
+    search_q = (request.args.get('q') or '').strip()
+
+    def _parse_date(raw):
+        try:
+            return datetime.strptime(raw, '%Y-%m-%d').date()
+        except (TypeError, ValueError):
+            return None
+
+    date_from = _parse_date(date_from_raw)
+    date_to = _parse_date(date_to_raw)
+
+    intake_q = TicketEmailIntake.query
+    if date_from:
+        intake_q = intake_q.filter(
+            TicketEmailIntake.received_at >= datetime.combine(date_from, datetime.min.time())
+        )
+    if date_to:
+        intake_q = intake_q.filter(
+            TicketEmailIntake.received_at < datetime.combine(date_to + timedelta(days=1), datetime.min.time())
+        )
+    if search_q:
+        like = f'%{search_q}%'
+        intake_q = intake_q.filter(
+            db.or_(
+                TicketEmailIntake.from_email.ilike(like),
+                TicketEmailIntake.from_name.ilike(like),
+                TicketEmailIntake.subject.ilike(like),
+            )
+        )
+    # Capped, not paginated — this is an ops-review list, not a data export;
+    # revisit with real pagination if intake volume grows past this.
+    intake_rows = intake_q.order_by(TicketEmailIntake.received_at.desc()).limit(5000).all()
+
+    def _outcome(row):
+        t = row.ticket
+        if not t:
+            return 'failed'
+        if t.status == 'draft':
+            return 'pending'
+        if t.status == 'cancelled':
+            return 'discarded'
+        return 'converted'
+
+    intake_counts = {'total': 0, 'converted': 0, 'pending': 0, 'discarded': 0, 'failed': 0}
+    intake_all = []
+    for row in intake_rows:
+        outcome = _outcome(row)
+        intake_counts['total'] += 1
+        intake_counts[outcome] += 1
+        intake_all.append({'row': row, 'outcome': outcome})
+
+    intake_filtered = (
+        [item for item in intake_all if item['outcome'] == status_filter]
+        if status_filter in ('converted', 'pending', 'discarded', 'failed')
+        else intake_all
+    )
+    INTAKE_PAGE_SIZE = 200
+    intake_items = intake_filtered[:INTAKE_PAGE_SIZE]
+    intake_truncated = len(intake_filtered) - len(intake_items)
+
     return render_template(
         'ticket_drafts.html',
         user=user,
         drafts=drafts,
+        intake_items=intake_items,
+        intake_counts=intake_counts,
+        intake_status_filter=status_filter,
+        intake_date_from=date_from_raw,
+        intake_date_to=date_to_raw,
+        intake_search_q=search_q,
+        intake_truncated=intake_truncated,
         sidebar_stats=_get_sidebar_stats(user),
         active_page='ticketing',
     )
@@ -1460,21 +1536,62 @@ def draft_ticket_review(ticket_id):
     if not _can_view_draft_tickets(user) and not is_own_assistant_draft:
         abort(403)
 
-    projects = sorted(
-        {p[0] for p in TicketProject.query.filter_by(is_active=True).with_entities(TicketProject.name) if p[0]}
-    )
-    all_users = User.query.filter_by(is_active=True).order_by(User.full_name).all()
-    images = ticket.images.all()
+    reporter_candidates = list(_reporter_candidates())
+    if ticket.reporter_id and ticket.reporter_id not in {u.id for u in reporter_candidates}:
+        current_reporter = db.session.get(User, ticket.reporter_id)
+        if current_reporter:
+            reporter_candidates.insert(0, current_reporter)
+
+    blankish = {'', 'unassigned', 'unclassified'}
+    def _draft_blank(val):
+        v = (val or '').strip()
+        return '' if v.lower() in blankish else v
+
+    gaps = []
+    if not _draft_blank(ticket.project):
+        gaps.append('Project')
+    if not _draft_blank(ticket.service_group):
+        gaps.append('Service group')
+    if not _draft_blank(ticket.category):
+        gaps.append('Category')
+    if not _draft_blank(ticket.fault_type):
+        gaps.append('Fault type')
+    if not (ticket.property_name or '').strip() and not ticket.property_id:
+        gaps.append('Location')
+
+    draft_seed = {
+        'ticket_id': ticket.ticket_id,
+        'title': ticket.title or '',
+        'project': _draft_blank(ticket.project),
+        'service_group': _draft_blank(ticket.service_group),
+        'category': _draft_blank(ticket.category),
+        'fault_type': _draft_blank(ticket.fault_type),
+        'priority': ticket.priority or 'medium',
+        'work_description': ticket.work_description or '',
+        'property_name': ticket.property_name or '',
+        'zone': ticket.zone or '',
+        'sub_zone': ticket.sub_zone or '',
+        'base_unit': ticket.base_unit or '',
+        'property_id': ticket.property_id,
+        'zone_id': ticket.zone_id,
+        'sub_zone_id': ticket.sub_zone_id,
+        'base_unit_id': ticket.base_unit_id,
+        'reporter_id': ticket.reporter_id,
+        'is_chargeable': bool(ticket.is_chargeable),
+        'projected_cost': ticket.projected_cost,
+    }
 
     return render_template(
-        'ticket_draft_review.html',
+        'ticket_new.html',
         user=user,
-        ticket=ticket,
-        projects=projects,
-        all_users=all_users,
-        images=images,
+        all_users=reporter_candidates,
+        procurement_materials=_get_procurement_materials(),
         sidebar_stats=_get_sidebar_stats(user),
         active_page='ticketing',
+        draft_ticket=ticket,
+        draft_images=ticket.images.all(),
+        draft_gaps=gaps,
+        draft_seed=draft_seed,
     )
 
 
@@ -2085,6 +2202,33 @@ def triage_preview():
         ticket_code=(data.get('ticket_id') or data.get('ticket_code') or None),
         log_decision='preview',
     )
+    status = 200 if result.get('success') else 502
+    return jsonify(result), status
+
+
+@ticketing_bp.route('/api/tickets/classify-preview', methods=['POST'])
+@jwt_required()
+def classify_preview():
+    """AI-suggest Service Group / Category / Fault code from title + description.
+
+    Email intake never fills these in (see _process_inbound_email_intake) — this
+    lets the draft-review form suggest them from the fault catalog instead of
+    leaving the reviewer to search ~1000+ fault codes by hand. Human must
+    confirm before apply; nothing here mutates the Ticket row.
+    """
+    user = _current_user()
+    if not _has_access(user):
+        return jsonify({'success': False, 'error': 'Access denied'}), 403
+    data = request.get_json(silent=True) or {}
+    if not (data.get('title') or data.get('work_description')):
+        return jsonify({'success': False, 'error': 'title or work_description required'}), 400
+
+    try:
+        from module_ai_triage.triage import classify_ticket
+    except ImportError as exc:
+        return jsonify({'success': False, 'error': f'Classification module unavailable: {exc}'}), 503
+
+    result = classify_ticket(data)
     status = 200 if result.get('success') else 502
     return jsonify(result), status
 

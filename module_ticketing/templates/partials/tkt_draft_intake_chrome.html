@@ -1,0 +1,69 @@
+{# Email-intake chrome around the shared New work order form.
+   Requires: draft_ticket, draft_images (optional), draft_gaps (list of labels). #}
+{% set sender_name = draft_ticket.source_sender_name or '' %}
+{% set sender_email = draft_ticket.source_sender_email or '' %}
+{% set sender_label = sender_name or sender_email or 'Unknown sender' %}
+{% set sender_initial = (sender_label|trim)[:1]|upper or '?' %}
+<header class="tkt-draft-head">
+  <div>
+    <p class="tkt-draft-kicker">Email intake</p>
+    <div class="tkt-draft-title-row">
+      <h2 class="tkt-draft-title">{{ draft_ticket.ticket_id }}</h2>
+      <span class="tkt-draft-badge">Draft</span>
+    </div>
+    <p class="tkt-draft-copy">This work order was started from an email. Confirm location and classification on the form — the original message stays on the left.</p>
+    {% if draft_gaps %}
+    <div class="tkt-draft-gaps" aria-label="Fields that still need a value">
+      {% for gap in draft_gaps %}
+      <span class="tkt-draft-gap">{{ gap }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</header>
+<aside class="tkt-draft-mail" aria-label="Original email">
+  <div class="tkt-draft-mail-bar">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 0 1-2.25 2.25h-15a2.25 2.25 0 0 1-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25m19.5 0v.243a2.25 2.25 0 0 1-1.07 1.916l-7.5 4.615a2.25 2.25 0 0 1-2.36 0L3.32 8.91a2.25 2.25 0 0 1-1.07-1.916V6.75"/></svg>
+    Original email
+  </div>
+  <div class="tkt-draft-mail-from">
+    <div class="tkt-draft-avatar" aria-hidden="true">{{ sender_initial }}</div>
+    <div>
+      <p class="tkt-draft-from-name">{{ sender_label }}</p>
+      {% if sender_name and sender_email %}
+      <p class="tkt-draft-from-email">{{ sender_email }}</p>
+      {% endif %}
+      <p class="tkt-draft-from-time">{{ draft_ticket.created_at|tkt_datetime if draft_ticket.created_at else 'Received time unknown' }}</p>
+    </div>
+  </div>
+  <h3 class="tkt-draft-subject">{{ draft_ticket.source_subject or draft_ticket.title or 'No subject' }}</h3>
+  {% if draft_ticket.property_name or draft_ticket.zone or draft_ticket.base_unit %}
+  <div class="tkt-draft-parsed">
+    <p class="tkt-draft-parsed-label">Location, as written in the email</p>
+    <ul>
+      {% if draft_ticket.property_name %}<li><strong>Property:</strong> {{ draft_ticket.property_name }}</li>{% endif %}
+      {% if draft_ticket.zone %}<li><strong>Zone:</strong> {{ draft_ticket.zone }}</li>{% endif %}
+      {% if draft_ticket.base_unit %}<li><strong>Unit:</strong> {{ draft_ticket.base_unit }}</li>{% endif %}
+    </ul>
+  </div>
+  {% endif %}
+  <div class="tkt-draft-body">{{ draft_ticket.work_description or '—' }}</div>
+  {% if draft_images %}
+  <div class="tkt-draft-photos">
+    {% for img in draft_images %}
+    <div class="tkt-image-thumb">
+      <img src="{{ url_for('ticketing.serve_image', image_id=img.id) }}" alt="{{ img.filename or 'Attachment' }}"
+           onclick="tktOpenLightbox('{{ url_for('ticketing.serve_image', image_id=img.id) }}')">
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="tkt-draft-mail-actions">
+    <button type="button" id="discardBtn" class="tkt-btn tkt-btn-danger tkt-draft-actions-left">Discard draft</button>
+    <a href="{{ url_for('ticketing.draft_tickets') }}" class="tkt-btn tkt-btn-outline">Cancel</a>
+    <button type="submit" form="tktNewForm" class="tkt-btn tkt-btn-primary" id="submitBtn">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>
+      Convert to work order
+    </button>
+  </div>
+</aside>

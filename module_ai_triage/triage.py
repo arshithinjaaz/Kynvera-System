@@ -259,6 +259,91 @@ def triage_ticket(
     }
 
 
+CLASSIFY_SCHEMA = {
+    'required': ['fault_code_id', 'reasoning'],
+    'properties': {
+        'fault_code_id': (int, type(None)),
+        'reasoning': str,
+    },
+}
+
+CLASSIFY_SYSTEM_PROMPT = (
+    'You are an FM work-order classification assistant for Kynvera. '
+    'You are given the full fault-code catalog, one entry per line as '
+    '"id<TAB>service_group<TAB>category<TAB>fault name", and a work-order title/description '
+    '(often copied straight from an inbound email, so it may be terse or informal). '
+    'Return the single fault_code_id whose fault name is the best match for the complaint. '
+    'Only return an id that literally appears in the catalog — never invent one. '
+    'If nothing in the catalog is a reasonable match, return fault_code_id: null. '
+    'reasoning is one short sentence explaining the match, or why nothing fit.'
+)
+
+
+def _fault_catalog_rows() -> List[dict]:
+    from module_ticketing import ticket_field_catalog as tkt_fields
+    opts = tkt_fields.classification_options()
+    return (opts or {}).get('fault_catalog') or []
+
+
+def classify_ticket(ticket_payload: dict) -> Dict[str, Any]:
+    """Suggest Service Group / Category / Fault code from title + description.
+
+    Unlike triage_ticket, this never writes an audit log row — it's a stateless
+    lookup against the existing fault catalog, re-run freely from the UI.
+    Returns: { success, suggestion: {..} | None, reasoning?, error? }
+    Never mutates the Ticket row.
+    """
+    if not is_llm_enabled():
+        return {'success': False, 'error': 'LLM is not enabled', 'suggestion': None}
+
+    title = (ticket_payload.get('title') or '').strip()
+    description = (ticket_payload.get('work_description') or '').strip()
+    if not title and not description:
+        return {'success': False, 'error': 'title or work_description required', 'suggestion': None}
+
+    rows = _fault_catalog_rows()
+    if not rows:
+        return {'success': False, 'error': 'No fault catalog configured', 'suggestion': None}
+
+    by_id = {r['id']: r for r in rows if r.get('id') is not None}
+    catalog_block = '\n'.join(
+        f"{r['id']}\t{r.get('service_group') or ''}\t{r.get('fault_category') or ''}\t{r.get('fault_code_name') or ''}"
+        for r in rows if r.get('id') is not None
+    )
+
+    user_content = (
+        'Classify this work order against the fault catalog below. Return JSON only.\n\n'
+        f'Title: {title}\n'
+        f'Description: {description}\n\n'
+        'Fault catalog (id<TAB>service_group<TAB>category<TAB>fault name):\n'
+        + catalog_block
+    )
+
+    try:
+        raw = generate_structured(CLASSIFY_SYSTEM_PROMPT, user_content, CLASSIFY_SCHEMA)
+    except StructuredLLMError as exc:
+        logger.warning('Classification LLM error: %s', exc)
+        return {'success': False, 'error': str(exc), 'suggestion': None}
+
+    reasoning = (raw.get('reasoning') or '').strip()[:500]
+    match = by_id.get(raw.get('fault_code_id'))
+    if not match:
+        return {'success': True, 'suggestion': None, 'reasoning': reasoning}
+
+    return {
+        'success': True,
+        'suggestion': {
+            'fault_code_id': match['id'],
+            'service_group': match.get('service_group'),
+            'category': match.get('fault_category'),
+            'fault_code': match.get('fault_code'),
+            'fault_code_name': match.get('fault_code_name'),
+            'fault_pick_value': match.get('fault_pick_value'),
+            'reasoning': reasoning,
+        },
+    }
+
+
 def confirm_triage(
     triage_log_id: int,
     accepted: dict,

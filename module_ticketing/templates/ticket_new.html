@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
-  <title>New work order — Kynvera</title>
+  <title>{% if draft_ticket %}Review draft {{ draft_ticket.ticket_id }}{% else %}New work order{% endif %} — Kynvera</title>
   {% include 'partials/caveat_font.html' ignore missing %}
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='mobile_responsive.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v=22">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dochub-page.css') }}?v=25">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/ticketing.css') }}?v=21">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/ticketing.css') }}?v=24">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
   <style>
     /* Page shell — a bit wider so side-by-side form columns use the viewport */
@@ -493,7 +493,8 @@
       justify-content: flex-start;
       padding-top: 2px;
     }
-    .tkt-ai-triage #aiTriageResult {
+    .tkt-ai-triage #aiTriageResult,
+    .tkt-ai-triage #aiClassifyResult {
       margin-top: 12px;
       font-size: .86rem;
       flex: 1 1 auto;
@@ -502,12 +503,20 @@
       min-height: 0;
       gap: 14px;
     }
-    .tkt-ai-triage #aiTriageResult[hidden] { display: none !important; }
-    .tkt-ai-triage #aiTriageSummary {
+    .tkt-ai-triage #aiTriageResult[hidden],
+    .tkt-ai-triage #aiClassifyResult[hidden] { display: none !important; }
+    .tkt-ai-triage #aiTriageSummary,
+    .tkt-ai-triage #aiClassifySummary {
       flex: 0 0 auto;
       display: flex;
       flex-direction: column;
       gap: 14px;
+    }
+    .tkt-ai-triage #aiClassifyHint {
+      margin: 8px 0 0;
+      font-size: .8rem;
+      color: #64748b;
+      flex: 0 0 auto;
     }
     .tkt-ai-result-metrics {
       display: grid;
@@ -1711,16 +1720,26 @@
     .tkt-section-header::after { content: ''; flex: 1; height: 1px; background: #e2e8f0; }
   </style>
 </head>
-<body class="tkt-dh-page has-main-nav">
+<body class="tkt-dh-page has-main-nav{% if draft_ticket %} tkt-draft-review-page{% endif %}">
 <div class="tkt-dh-app-root">
 {% set active_page = active_page | default('ticketing') %}
 {% include 'partials/main_navbar.html' with context %}
 <div class="dh-page-root tkt-dh-page-root">
 {% include 'partials/tkt_sidebar.html' with context %}
 <div class="tkt-dh-main">
-{% set tkt_topbar_title = 'New work order' %}
+{% if draft_ticket %}
+  {% set tkt_topbar_title = 'Review draft' %}
+  {% set module_back_url = url_for('ticketing.draft_tickets') %}
+{% else %}
+  {% set tkt_topbar_title = 'New work order' %}
+{% endif %}
 {% include 'partials/tkt_topbar.html' with context %}
 <div class="tkt-content">
+
+{% if draft_ticket %}
+<div class="tkt-draft-shell tkt-draft-shell--compose">
+  {% include 'partials/tkt_draft_intake_chrome.html' %}
+{% endif %}
 
 <div class="new-tkt-page-wrap">
     <div class="new-tkt-layout">
@@ -1873,6 +1892,30 @@
                 </select>
               </div>
 
+              {% if draft_ticket %}
+              <div class="tkt-ai-triage" id="aiClassifyBox">
+                <div class="tkt-ai-triage-row">
+                  <strong id="aiClassifyTitle">AI classification suggestion</strong>
+                  <button type="button" class="tkt-btn tkt-btn-outline tkt-btn-sm" id="aiClassifyBtn">Suggest classification</button>
+                </div>
+                <p id="aiClassifyHint">AI matches the email against the fault catalog. You review before creating — nothing is auto-applied.</p>
+                <div id="aiClassifyResult" hidden>
+                  <div id="aiClassifySummary"></div>
+                  <div class="tkt-ai-using" id="aiClassifyUsing" hidden>
+                    <span class="tkt-ai-using-badge">AI</span>
+                    <div class="tkt-ai-using-copy">
+                      <strong>Using AI suggestion</strong>
+                      Service Group, Category, and Fault code on this work order come from AI. Review before you create.
+                    </div>
+                  </div>
+                  <div class="tkt-ai-actions" id="aiClassifyActions">
+                    <button type="button" class="tkt-btn tkt-btn-primary tkt-btn-sm" id="aiClassifyAccept">Accept suggestion</button>
+                    <button type="button" class="tkt-btn tkt-btn-outline tkt-btn-sm" id="aiClassifyDismiss">Keep my values</button>
+                  </div>
+                </div>
+              </div>
+              {% endif %}
+
               <div class="tkt-section-header" style="margin-top:20px;">Priority</div>
               <div class="priority-pill-group" id="priorityGroup">
                 <label class="priority-pill priority-pill-low" data-val="low">
@@ -1898,7 +1941,7 @@
                   <strong id="aiTriageTitle">AI triage suggestion</strong>
                   <button type="button" class="tkt-btn tkt-btn-outline tkt-btn-sm" id="aiTriageBtn">Suggest priority / SLA / tech</button>
                 </div>
-                <p id="aiTriageHint">Claude suggests priority, SLA hours, technician, and parts. You review before creating — nothing is auto-applied.</p>
+                <p id="aiTriageHint">AI suggests priority, SLA hours, technician, and parts. You review before creating — nothing is auto-applied.</p>
                 <div class="tkt-ai-skeleton" id="aiTriageSkeleton" aria-hidden="true">
                   <div class="tkt-ai-wire-metrics">
                     <div class="tkt-ai-wire-metric"><span class="lbl"></span><span class="val"></span></div>
@@ -1930,7 +1973,7 @@
                     <span class="tkt-ai-using-badge">AI</span>
                     <div class="tkt-ai-using-copy">
                       <strong>Using AI suggestion</strong>
-                      Priority, SLA, technician, and parts on this work order come from Claude. Review them before you create.
+                      Priority, SLA, technician, and parts on this work order come from AI. Review them before you create.
                     </div>
                   </div>
                   <div class="tkt-ai-actions" id="aiTriageActions">
@@ -2030,7 +2073,13 @@
               </h3>
             </div>
             <div class="tkt-card-body new-tkt-reporter-card-body">
-              <p style="font-size:.78rem;color:#64748b;margin:0 0 12px;line-height:1.45;">Goes to the <strong>supervisor queue</strong> first for vendor assignment.</p>
+              <p style="font-size:.78rem;color:#64748b;margin:0 0 12px;line-height:1.45;">
+                {% if draft_ticket %}
+                Reassign if the email came from someone without a Kynvera account. Then it goes to the <strong>supervisor queue</strong> for vendor assignment.
+                {% else %}
+                Goes to the <strong>supervisor queue</strong> first for vendor assignment.
+                {% endif %}
+              </p>
               <div class="tkt-form-grid">
                 <div class="tkt-field" style="margin-bottom:0;">
                   <label>Reported By <span class="req">*</span></label>
@@ -2038,13 +2087,19 @@
                     <option value="">Select reporter…</option>
                     {% for u in all_users %}
                     <option value="{{ u.id }}"
-                            {% if u.id == user.id %}selected{% endif %}
+                            {% if draft_ticket %}
+                              {% if u.id == draft_ticket.reporter_id %}selected{% endif %}
+                            {% elif u.id == user.id %}selected{% endif %}
                             data-name="{{ u.full_name or '' }}"
                             data-email="{{ u.email or '' }}"
                             data-phone="{{ u.phone or '' }}"
                             data-designation="{{ u.job_designation or '' }}"
                             data-role="{{ (u.role or '')|replace('_',' ')|title }}">
-                      {{ u.full_name }}{% if u.job_designation %} — {{ u.job_designation }}{% endif %}
+                      {% if u.username == 'email_intake' %}
+                        Email intake — unmatched sender
+                      {% else %}
+                        {{ u.full_name }}{% if u.job_designation %} — {{ u.job_designation }}{% endif %}
+                      {% endif %}
                     </option>
                     {% endfor %}
                   </select>
@@ -2105,15 +2160,6 @@
           </div><!-- /.new-tkt-form-split reporter + billing -->
 
         </div><!-- /.new-tkt-form-rows -->
-
-          <!-- ── Submit ── -->
-          <div style="display:flex;justify-content:flex-end;align-items:center;gap:20px;margin-top:20px;">
-            <a href="{{ url_for('ticketing.dashboard') }}" class="tkt-btn tkt-btn-outline">Cancel</a>
-            <button type="submit" class="tkt-btn tkt-btn-primary" id="submitBtn" style="min-width:180px;">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
-              Create Work Order
-            </button>
-          </div>
         </form>
       </div><!-- /left -->
 
@@ -2163,7 +2209,7 @@
         <!-- Create readiness -->
         <div class="tkt-card new-tkt-ready-card" style="margin-top:14px;" id="createReadyCard">
           <div class="tkt-card-header">
-            <h3>Ready to create</h3>
+            <h3>{% if draft_ticket %}Ready to convert{% else %}Ready to create{% endif %}</h3>
             <span class="new-tkt-assist-progress" id="createReadyCount">0 / 6</span>
           </div>
           <div class="tkt-card-body">
@@ -2177,7 +2223,11 @@
               <li data-ready="reporter"><span class="new-tkt-check-mark" aria-hidden="true"></span><span>Reporter</span></li>
             </ul>
             <p class="new-tkt-assist-note" id="createReadyHint">
+              {% if draft_ticket %}
+              Fill the required fields — then convert this email into a work order.
+              {% else %}
               Fill the required fields — then create. Photos and FM asset link are optional.
+              {% endif %}
             </p>
             <div class="new-tkt-ready-assets" id="sidebarAssetsBlock">
               <div class="new-tkt-assist-head" style="margin-bottom:8px;">
@@ -2212,7 +2262,7 @@
           </div>
           <div class="tkt-card-body tkt-summary-photos-card__body">
             <span class="summary-val empty" id="sum-images">None selected</span>
-            <p class="summary-photo-hint">Uploaded automatically right after the work order is created.</p>
+            <p class="summary-photo-hint">{% if draft_ticket %}Email attachments appear on the left. Add extra photos here if needed.{% else %}Uploaded automatically right after the work order is created.{% endif %}</p>
             <div class="new-tkt-pending-img-grid new-tkt-pending-img-grid--sidebar" id="newTicketImagePreview" hidden></div>
             <div class="tkt-upload-zone summary-new-tkt-upload" id="newTicketUploadZone">
               <input type="file" id="newTicketImageInput" accept="image/png,image/jpeg,image/gif,image/webp,image/heic,image/heif,.heic,.heif" multiple>
@@ -2241,13 +2291,34 @@
       </div><!-- /right -->
 
     </div><!-- /layout -->
+
+    {% if not draft_ticket %}
+    <!-- ── Submit ── -->
+    <div class="tkt-draft-actions" style="display:flex;justify-content:flex-end;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px;">
+      <a href="{{ url_for('ticketing.dashboard') }}" class="tkt-btn tkt-btn-outline">Cancel</a>
+      <button type="submit" form="tktNewForm" class="tkt-btn tkt-btn-primary" id="submitBtn" style="min-width:180px;">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg>
+        Create Work Order
+      </button>
+    </div>
+    {% endif %}
+    {# Draft-review Discard/Cancel/Convert buttons live in the left rail —
+       see partials/tkt_draft_intake_chrome.html — right under the short,
+       sticky "Original email" card instead of at the foot of this much
+       longer form, so they're reachable without scrolling past it. #}
 </div><!-- /new-tkt-page-wrap -->
+{% if draft_ticket %}
+</div><!-- /tkt-draft-shell -->
+{% endif %}
 
 </div></div>{# tkt-content / tkt-dh-main #}
 </div></div>{# tkt-dh-page-root / tkt-dh-app-root #}
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="{{ url_for('static', filename='js/ticketing.js') }}"></script>
+<script>
+window.TKT_DRAFT_SEED = {{ (draft_seed if draft_seed is defined else none)|tojson }};
+</script>
 <script>
 let _options = {};
 let _locationTree = [];
@@ -2271,6 +2342,7 @@ let _complSearchStaging = [];
 /** Populated when options.use_fault_catalog — official fault-code rows */
 let _faultCatalog = [];
 let _suppressNextDescFetch = false;
+let _preserveDraftDescription = false;
 /** Pending files shown on New Work Order; uploaded after POST /api/tickets succeeds */
 let _pendingTicketImages = []; // { id, file, url }
 const NEW_TKT_MAX_IMAGES = 20;
@@ -3199,6 +3271,134 @@ function initLocationComplaintSearchUI() {
   });
 }
 
+function pickSelectByIdOrLabel(selectId, id, label) {
+  const el = document.getElementById(selectId);
+  if (!el) return false;
+  if (id != null && id !== '') {
+    const sid = String(id);
+    if ([...el.options].some((o) => o.value === sid)) {
+      ticketNewSelCascade(selectId, sid);
+      return true;
+    }
+  }
+  const want = (label || '').trim().toLowerCase();
+  if (!want) return false;
+  const opt = [...el.options].find((o) => {
+    const lab = (o.dataset.label || o.textContent || '').trim().toLowerCase();
+    const name = (o.dataset.name || '').trim().toLowerCase();
+    return lab === want || name === want;
+  });
+  if (!opt) return false;
+  ticketNewSelCascade(selectId, opt.value);
+  return true;
+}
+
+// The property picker only lists properties for whichever project is currently
+// selected (see updateLocationFromProject) — so a seeded property_name that
+// belongs to a real, catalogued property still won't be found by
+// pickSelectByIdOrLabel('propertySelect', ...) whenever no project is selected
+// yet (the normal case for email intake, which rarely names a project). Search
+// the full cross-project catalog instead, and select that property's project
+// first so the picker repopulates to include it.
+function seedPropertyAcrossProjects(seed) {
+  if (pickSelectByIdOrLabel('propertySelect', seed.property_id, seed.property_name)) return true;
+
+  const want = (seed.property_name || '').trim().toLowerCase();
+  if (!want) return false;
+  const match = (_allProperties || []).find((p) => (p.name || '').trim().toLowerCase() === want);
+  if (!match) return false;
+
+  const projSel = document.getElementById('project');
+  if (projSel && match._projectName) {
+    if ([...projSel.options].some((o) => o.value === match._projectName)) {
+      projSel.value = match._projectName;
+      projSel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+
+  return pickSelectByIdOrLabel('propertySelect', match.id, null);
+}
+
+function applyDraftSeed(seed) {
+  if (!seed || !seed.ticket_id) return;
+  _preserveDraftDescription = true;
+  _suppressNextDescFetch = true;
+
+  const titleEl = document.getElementById('title');
+  const descEl = document.getElementById('workDescription');
+  if (titleEl && seed.title) titleEl.value = seed.title;
+  if (descEl && seed.work_description) {
+    descEl.value = seed.work_description;
+    _descAutoFilled = false;
+    syncWorkDescSkeleton();
+  }
+  if (seed.priority) setPriorityPill(seed.priority);
+
+  const projSel = document.getElementById('project');
+  if (projSel && seed.project && [...projSel.options].some((o) => o.value === seed.project)) {
+    projSel.value = seed.project;
+    projSel.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  seedPropertyAcrossProjects(seed);
+  pickSelectByIdOrLabel('zoneSelect', seed.zone_id, seed.zone);
+  pickSelectByIdOrLabel('subZoneSelect', seed.sub_zone_id, seed.sub_zone);
+  pickSelectByIdOrLabel('baseUnitSelect', seed.base_unit_id, seed.base_unit);
+
+  // Email intake often names a location that isn't a registered property/zone/
+  // unit verbatim (e.g. "Tower A" vs. the catalog's actual spelling) — the exact-
+  // match lookups above then leave the pickers empty and silently drop what the
+  // sender wrote. Surface it in the free-text search box instead of losing it,
+  // so the reviewer sees it and can find the closest real match.
+  const propertySelectEl = document.getElementById('propertySelect');
+  const propertySearchEl = document.getElementById('propertySearch');
+  if (propertySearchEl && !propertySearchEl.value && (!propertySelectEl || !propertySelectEl.value)) {
+    const locBits = [seed.property_name, seed.zone, seed.sub_zone, seed.base_unit].filter(Boolean);
+    if (locBits.length) {
+      propertySearchEl.value = locBits.join(' / ');
+      propertySearchEl.placeholder = 'From email — search to match a real location…';
+    }
+  }
+
+  const sgEl = document.getElementById('serviceGroup');
+  const catEl = document.getElementById('category');
+  const ftEl = document.getElementById('faultType');
+  if (sgEl && seed.service_group && [...sgEl.options].some((o) => o.value === seed.service_group)) {
+    sgEl.value = seed.service_group;
+    sgEl.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (catEl && seed.category && [...catEl.options].some((o) => o.value === seed.category)) {
+    catEl.value = seed.category;
+    catEl.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (typeof ticketNewRefillFaultSelect === 'function' && ticketNewUsesFaultCatalog()) {
+    ticketNewRefillFaultSelect();
+  }
+  if (ftEl && seed.fault_type && [...ftEl.options].some((o) => o.value === seed.fault_type)) {
+    ftEl.value = seed.fault_type;
+    ftEl.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  const reporterEl = document.getElementById('reporterId');
+  if (reporterEl && seed.reporter_id) reporterEl.value = String(seed.reporter_id);
+
+  if (seed.is_chargeable) {
+    const charge = document.getElementById('isChargeable');
+    if (charge) {
+      charge.checked = true;
+      charge.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+  if (seed.projected_cost != null && seed.projected_cost !== '') {
+    const cost = document.getElementById('projectedCost');
+    if (cost) cost.value = seed.projected_cost;
+  }
+
+  if (titleEl && seed.title) titleEl.value = seed.title;
+  if (descEl && seed.work_description) descEl.value = seed.work_description;
+  updateSummary();
+}
+
 // ── Boot ─────────────────────────────────────────────────
 (async () => {
   const [optRes, projRes, locRes] = await Promise.all([
@@ -3280,7 +3480,13 @@ function initLocationComplaintSearchUI() {
   initTitleAutocomplete();
   initLocationComplaintSearchUI();
   initNewTicketImageUI();
+  applyDraftSeed(window.TKT_DRAFT_SEED);
   updateSummary();
+  {% if draft_ticket %}
+  // The reviewer shouldn't have to notice the button exists and click it
+  // just to see what the email probably meant — run it once automatically.
+  if (typeof runAiClassify === 'function') runAiClassify();
+  {% endif %}
 })();
 
 // ── Classification change → auto-desc + title suggestions ──
@@ -3294,7 +3500,7 @@ async function onClassificationChange() {
 
     updateSummary();
 
-    const skipApiDesc = _suppressNextDescFetch;
+    const skipApiDesc = _suppressNextDescFetch || _preserveDraftDescription;
     _suppressNextDescFetch = false;
 
     const useCatalog = ticketNewUsesFaultCatalog();
@@ -3304,11 +3510,11 @@ async function onClassificationChange() {
     const titleEl = document.getElementById('title');
 
     if (useCatalog && row && ft) {
-      if (!titleEl?.value.trim() && row.suggested_title) {
+      if (!_preserveDraftDescription && !titleEl?.value.trim() && row.suggested_title) {
         titleEl.value = row.suggested_title;
       }
       const descEmpty = !descEl.value.trim() || _descAutoFilled;
-      if ((descEmpty || skipApiDesc) && row.suggested_work_description) {
+      if (!_preserveDraftDescription && (descEmpty || skipApiDesc) && row.suggested_work_description) {
         descEl.value = row.suggested_work_description;
         _descAutoFilled = true;
         autoBar?.classList.add('show');
@@ -4205,9 +4411,16 @@ document.getElementById('projectedCost')?.addEventListener('input', updateSummar
 // ── Submit ────────────────────────────────────────────────
 document.getElementById('tktNewForm').addEventListener('submit', async (e) => {
   e.preventDefault();
+  const isDraftConvert = !!(window.TKT_DRAFT_SEED && window.TKT_DRAFT_SEED.ticket_id);
+  const submitIdleHtml = isDraftConvert
+    ? '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg> Convert to work order'
+    : '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg> Create Work Order';
+
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="tkt-spinner"></span> Creating…';
+  btn.innerHTML = isDraftConvert
+    ? '<span class="tkt-spinner"></span> Converting…'
+    : '<span class="tkt-spinner"></span> Creating…';
 
   const getVal = (id) => (document.getElementById(id)?.value || '').trim();
   const payload = {
@@ -4246,7 +4459,7 @@ document.getElementById('tktNewForm').addEventListener('submit', async (e) => {
   if (!locCascade.ok) {
     tktToast(locCascade.msg, 'error');
     btn.disabled = false;
-    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg> Create Work Order';
+    btn.innerHTML = submitIdleHtml;
     return;
   }
 
@@ -4259,12 +4472,15 @@ document.getElementById('tktNewForm').addEventListener('submit', async (e) => {
     if (!payload[f]) {
       tktToast(`"${f.replace(/_/g,' ')}" is required.`, 'error');
       btn.disabled = false;
-      btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg> Create Work Order';
+      btn.innerHTML = submitIdleHtml;
       return;
     }
   }
 
-  const res = await tktFetch('/tickets/api/tickets', { method: 'POST', body: JSON.stringify(payload) });
+  const createUrl = isDraftConvert
+    ? `/tickets/api/tickets/${encodeURIComponent(window.TKT_DRAFT_SEED.ticket_id)}/convert-draft`
+    : '/tickets/api/tickets';
+  const res = await tktFetch(createUrl, { method: 'POST', body: JSON.stringify(payload) });
   if (res.ok && res.data.success) {
     const tid = res.data.ticket_id;
     const pendingN = _pendingTicketImages.length;
@@ -4273,21 +4489,44 @@ document.getElementById('tktNewForm').addEventListener('submit', async (e) => {
       const up = await uploadPendingImagesForNewTicket(tid);
       if (up.failed > 0) {
         tktToast(
-          `Work order created. ${up.failed} of ${pendingN} image(s) failed to upload — add them from the ticket page.`,
+          `Work order saved. ${up.failed} of ${pendingN} image(s) failed to upload — add them from the ticket page.`,
           'error',
           5200,
         );
       } else {
-        tktToast('Work order created with photos.', 'success');
+        tktToast(isDraftConvert ? 'Converted with photos.' : 'Work order created with photos.', 'success');
       }
     } else {
-      tktToast('Work order created!', 'success');
+      tktToast(isDraftConvert ? 'Converted to an active work order.' : 'Work order created!', 'success');
     }
     setTimeout(() => { window.location.href = '/tickets/' + encodeURIComponent(tid); }, pendingN ? 900 : 600);
   } else {
     tktToast('Error: ' + (res.data.error || 'Unknown'), 'error');
     btn.disabled = false;
-    btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/></svg> Create Work Order';
+    btn.innerHTML = submitIdleHtml;
+  }
+});
+
+document.getElementById('discardBtn')?.addEventListener('click', async () => {
+  const seed = window.TKT_DRAFT_SEED;
+  if (!seed || !seed.ticket_id) return;
+  const okConfirm = await tktConfirm({
+    title: 'Discard this draft?',
+    message: 'It will be marked cancelled and will not become an active work order.',
+    okText: 'Discard',
+    cancelText: 'Keep draft',
+    danger: true,
+  });
+  if (!okConfirm) return;
+  const { ok, data } = await tktFetch(`/tickets/api/tickets/${encodeURIComponent(seed.ticket_id)}/discard-draft`, {
+    method: 'POST',
+    body: JSON.stringify({ reason: '' }),
+  });
+  if (ok && data.success) {
+    tktToast('Draft discarded.', 'success');
+    window.location.href = {{ url_for('ticketing.draft_tickets')|tojson }};
+  } else {
+    tktToast('Failed: ' + (data.error || 'Unknown error'), 'error');
   }
 });
 
@@ -4739,8 +4978,8 @@ function setAiTriageApplied(on) {
   if (btn) btn.textContent = _aiTriageApplied ? 'Suggest again' : 'Suggest priority / SLA / tech';
   if (hint) {
     hint.textContent = _aiTriageApplied
-      ? 'This work order is using Claude’s priority, SLA, technician, and parts. Suggest again to replace them.'
-      : 'Claude suggests priority, SLA hours, technician, and parts. You review before creating — nothing is auto-applied.';
+      ? 'This work order is using AI’s priority, SLA, technician, and parts. Suggest again to replace them.'
+      : 'AI suggests priority, SLA hours, technician, and parts. You review before creating — nothing is auto-applied.';
   }
   syncAiTriageResultVisibility();
 }
@@ -4830,9 +5069,118 @@ document.getElementById('aiTriageDismiss')?.addEventListener('click', () => {
   document.getElementById('aiTriageResult').hidden = true;
   syncAiTriageResultVisibility();
 });
+
+// ── AI classification suggestion (Service Group / Category / Fault code) ──
+// Draft-review only — aiClassifyBox only renders for draft_ticket in the
+// markup above — since email intake never fills these in, so this fires
+// automatically once the fault catalog and the seeded title/description
+// are ready.
+let _lastClassifySuggestion = null;
+let _aiClassifyApplied = false;
+
+function setAiClassifyApplied(on) {
+  _aiClassifyApplied = !!on;
+  const box = document.getElementById('aiClassifyBox');
+  const using = document.getElementById('aiClassifyUsing');
+  const actions = document.getElementById('aiClassifyActions');
+  const hint = document.getElementById('aiClassifyHint');
+  const title = document.getElementById('aiClassifyTitle');
+  const btn = document.getElementById('aiClassifyBtn');
+  box?.classList.toggle('is-applied', _aiClassifyApplied);
+  box?.classList.toggle('has-result', !!(document.getElementById('aiClassifyResult') && !document.getElementById('aiClassifyResult').hidden));
+  if (using) using.hidden = !_aiClassifyApplied;
+  actions?.classList.toggle('is-hidden', _aiClassifyApplied);
+  if (title) title.textContent = _aiClassifyApplied ? 'Using AI suggestion' : 'AI classification suggestion';
+  if (btn) btn.textContent = _aiClassifyApplied ? 'Suggest again' : 'Suggest classification';
+  if (hint) {
+    hint.textContent = _aiClassifyApplied
+      ? 'This work order is using AI’s Service Group, Category, and Fault code. Suggest again to replace them.'
+      : 'AI matches the email against the fault catalog. You review before creating — nothing is auto-applied.';
+  }
+}
+
+async function runAiClassify() {
+  const btn = document.getElementById('aiClassifyBtn');
+  if (!btn || btn.disabled) return;
+  const payload = {
+    title: (document.getElementById('title')?.value || '').trim(),
+    work_description: (document.getElementById('workDescription')?.value || '').trim(),
+  };
+  if (!payload.title && !payload.work_description) return;
+
+  if (_aiClassifyApplied) setAiClassifyApplied(false);
+  btn.disabled = true;
+  btn.textContent = 'Analyzing…';
+
+  const res = await tktFetch('/tickets/api/tickets/classify-preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+
+  btn.disabled = false;
+  btn.textContent = _aiClassifyApplied ? 'Suggest again' : 'Suggest classification';
+
+  if (!res.ok || !res.data.success) {
+    tktToast(res.data.error || 'AI classification failed', 'error');
+    return;
+  }
+
+  const s = res.data.suggestion;
+  _lastClassifySuggestion = s;
+  const summaryEl = document.getElementById('aiClassifySummary');
+  const resultEl = document.getElementById('aiClassifyResult');
+  if (!s) {
+    summaryEl.innerHTML = `<p class="tkt-ai-result-reason">${escHtmlTicketNew(res.data.reasoning || 'Nothing in the fault catalog matched closely enough — pick manually below.')}</p>`;
+    document.getElementById('aiClassifyActions').style.display = 'none';
+    resultEl.hidden = false;
+    setAiClassifyApplied(false);
+    return;
+  }
+  document.getElementById('aiClassifyActions').style.display = '';
+  summaryEl.innerHTML =
+    `<div class="tkt-ai-result-metrics">` +
+      `<div class="tkt-ai-result-metric"><span class="k">Service Group</span><span class="v">${escHtmlTicketNew(s.service_group || '—')}</span></div>` +
+      `<div class="tkt-ai-result-metric"><span class="k">Category</span><span class="v">${escHtmlTicketNew(s.category || '—')}</span></div>` +
+      `<div class="tkt-ai-result-metric"><span class="k">Fault code</span><span class="v">${escHtmlTicketNew(s.fault_code_name || s.fault_code || '—')}</span></div>` +
+    `</div>` +
+    (s.reasoning ? `<p class="tkt-ai-result-reason">${escHtmlTicketNew(s.reasoning)}</p>` : '');
+  resultEl.hidden = false;
+  setAiClassifyApplied(false);
+}
+
+document.getElementById('aiClassifyBtn')?.addEventListener('click', runAiClassify);
+
+document.getElementById('aiClassifyAccept')?.addEventListener('click', () => {
+  const s = _lastClassifySuggestion;
+  if (!s) return;
+  const sgEl = document.getElementById('serviceGroup');
+  const catEl = document.getElementById('category');
+  const ftEl = document.getElementById('faultType');
+  if (sgEl && s.service_group && [...sgEl.options].some((o) => o.value === s.service_group)) {
+    sgEl.value = s.service_group;
+    sgEl.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (catEl && s.category && [...catEl.options].some((o) => o.value === s.category)) {
+    catEl.value = s.category;
+    catEl.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (typeof ticketNewRefillFaultSelect === 'function') ticketNewRefillFaultSelect();
+  if (ftEl && s.fault_pick_value && [...ftEl.options].some((o) => o.value === s.fault_pick_value)) {
+    ftEl.value = s.fault_pick_value;
+    ftEl.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  setAiClassifyApplied(true);
+  tktToast('Using AI suggestion — review before creating.', 'success');
+  updateSummary?.();
+});
+
+document.getElementById('aiClassifyDismiss')?.addEventListener('click', () => {
+  setAiClassifyApplied(false);
+  document.getElementById('aiClassifyResult').hidden = true;
+});
 </script>
 <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
-<script>window.FILES_SAVE_MODULE = 'ticketing'; window.FILES_SAVE_MODULE_LABEL = 'Service Tickets'; window.FILES_SAVE_TICKET_STATUS = 'new';</script>
+<script>window.FILES_SAVE_MODULE = 'ticketing'; window.FILES_SAVE_MODULE_LABEL = 'Service Tickets'; window.FILES_SAVE_TICKET_STATUS = '{{ "draft" if draft_ticket else "new" }}';</script>
 <script src="{{ url_for('static', filename='js/files-save.js') }}?v=19"></script>
 <script src="{{ url_for('static', filename='js/fm-mobile.js') }}"></script>
 <script>

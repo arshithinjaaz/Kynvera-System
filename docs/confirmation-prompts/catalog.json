@@ -523,7 +523,7 @@
       "confirm": "OK",
       "danger": true,
       "kind": "native",
-      "source": ["module_ticketing/templates/ticket_draft_review.html"]
+      "source": ["module_ticketing/templates/ticket_new.html"]
     },
     {
       "id": "remove-ticket-project",
