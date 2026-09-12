@@ -22,7 +22,9 @@ TOOL_RESULT_MAX_CHARS = 8000
 AGENT_SYSTEM = """You are Kynvera Assistant — a helpful chat guide for the Kynvera platform.
 
 Rules:
-- Use tools for live facts (leave, tickets, pending forms, documents, profile, FM stats). Never invent counts, dates, ticket IDs, or policy details.
+- Use tools for live facts (leave, tickets, pending forms, documents, profile, FM stats, sites/properties, zones, material stock, devices, BD pipeline, QHSI, MMR cycle status, inspections, HR headcount). Never invent counts, dates, ticket IDs, or policy details.
+- Some data genuinely isn't tracked in this system (e.g. inspection pass/fail scores, per-workorder MMR report content). If a tool result doesn't have what was asked, say so plainly instead of guessing.
+- Answer only what was asked. If a tool returns fields the user didn't ask about, leave them out — do not paste a whole unrelated report just because a tool call returned it. If no tool covers part of a multi-part question, answer the part you can and say plainly you don't have the rest — never substitute a different tool's output and present it as if it answered the question.
 - If a tool says the user lacks access, say so plainly and suggest contacting an administrator.
 - To create a work-order ticket or save an HR leave draft, call propose_create_ticket or propose_leave_draft. Those calls only PREPARE a proposal. The user must tap Confirm in the chat. Never claim you already created or submitted anything.
 - If required fields are missing, still call the propose tool with what you have; the app will show a form. Do not ask a long series of follow-up questions.
@@ -81,16 +83,25 @@ def build_tool_registry() -> dict:
     from module_assistant import actions as act
     from module_assistant.rag import retrieve_context
     from module_assistant.tools import (
+        get_bd_pipeline_summary,
+        get_device_inventory,
         get_fm_cost_trend,
         get_fm_critical_assets,
         get_fm_failures_by_building,
         get_fm_maintenance_report_hint,
+        get_hr_overview,
+        get_inspection_activity,
+        get_material_stock,
+        get_mmr_status,
         get_my_inspections_summary,
         get_my_leave_history,
         get_my_profile,
         get_my_submissions_summary,
         get_pending_summary,
+        get_qhsi_summary,
+        get_sites_overview,
         get_ticket_summary,
+        get_zones_overview,
         search_documents,
     )
 
@@ -152,6 +163,37 @@ def build_tool_registry() -> dict:
 
     def _propose_leave(user, args):
         return act.propose_leave_draft(user, args or {})
+
+    def _sites(user, _args):
+        return get_sites_overview(user)
+
+    def _zones(user, args):
+        return get_zones_overview(user, property_name=args.get('property_name') or None)
+
+    def _devices(user, _args):
+        return get_device_inventory(user)
+
+    def _materials(user, args):
+        return get_material_stock(
+            user,
+            material_name=args.get('material_name') or None,
+            department=args.get('department') or None,
+        )
+
+    def _bd(user, _args):
+        return get_bd_pipeline_summary(user)
+
+    def _qhsi(user, _args):
+        return get_qhsi_summary(user)
+
+    def _mmr_status(user, _args):
+        return get_mmr_status(user)
+
+    def _inspection_activity(user, _args):
+        return get_inspection_activity(user)
+
+    def _hr_overview(user, _args):
+        return get_hr_overview(user)
 
     specs = [
         ToolSpec(
@@ -283,6 +325,89 @@ def build_tool_registry() -> dict:
             },
             'write',
             _propose_leave,
+        ),
+        ToolSpec(
+            'get_sites_overview',
+            'Active projects/sites and how many properties each has, company-wide. Requires ticketing access.',
+            _empty_schema(),
+            'read',
+            _sites,
+        ),
+        ToolSpec(
+            'get_zones_overview',
+            'Zones (and sub-zones) within a property/site. Pass property_name to list that property\'s zones '
+            '("what are the zones in Tower A"); leave it blank for a zone-count summary per property. '
+            'Requires ticketing access. This is the ONLY tool for zone questions — do not use get_sites_overview '
+            'for zone-level detail.',
+            {
+                'type': 'object',
+                'properties': {'property_name': _str_prop('Property/site name to list zones for')},
+            },
+            'read',
+            _zones,
+        ),
+        ToolSpec(
+            'get_device_inventory',
+            'Company-wide IT device inventory counts (online/offline, by type, OS, building). Admin only.',
+            _empty_schema(),
+            'read',
+            _devices,
+        ),
+        ToolSpec(
+            'get_material_stock',
+            'Procurement catalog and live stock-on-hand quantities. Pass material_name for a specific item '
+            '("how many pieces of X do we have"), or department (HVAC, Cleaning, Electrical, Plumbing) for a '
+            'category count ("how many HVAC materials do we have"). Leave both blank for an overall breakdown. '
+            'Requires procurement access.',
+            {
+                'type': 'object',
+                'properties': {
+                    'material_name': _str_prop('Specific material/item name to look up (fuzzy match)'),
+                    'department': _str_prop('Trade department: HVAC, Cleaning, Electrical, or Plumbing'),
+                },
+            },
+            'read',
+            _materials,
+        ),
+        ToolSpec(
+            'get_bd_pipeline_summary',
+            'BD/CRM sales pipeline: deal counts and value by stage, win rate, renewals due, overdue follow-ups. '
+            'Requires Business Development access.',
+            _empty_schema(),
+            'read',
+            _bd,
+        ),
+        ToolSpec(
+            'get_qhsi_summary',
+            'QHSI (Quality, Hospitality, Safety & Inspection) submission counts, staff PPE/uniform compliance, '
+            'and upcoming training. Requires QHSI access.',
+            _empty_schema(),
+            'read',
+            _qhsi,
+        ),
+        ToolSpec(
+            'get_mmr_status',
+            'Report Generation (MMR) dispatch-cycle status: whether the current cycle is approved, and recently '
+            'sent report cycles. Does not contain per-workorder report line items. Requires Report Generation access.',
+            _empty_schema(),
+            'read',
+            _mmr_status,
+        ),
+        ToolSpec(
+            'get_inspection_activity',
+            'Company-wide inspection submission counts (HVAC/civil/cleaning), total and this month. No pass/fail '
+            'or score data exists in this system. Requires inspection access.',
+            _empty_schema(),
+            'read',
+            _inspection_activity,
+        ),
+        ToolSpec(
+            'get_hr_overview',
+            'Company-wide HR headcount (active/inactive, by designation), total HR form volume (pending vs '
+            'finished), and leave-application counts by leave type. Requires HR staff, GM, or admin.',
+            _empty_schema(),
+            'read',
+            _hr_overview,
         ),
     ]
     return {s.name: s for s in specs}

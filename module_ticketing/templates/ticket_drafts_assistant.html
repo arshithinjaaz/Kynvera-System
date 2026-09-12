@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
+  <title>Ticket drafts — Kynvera</title>
+  {% include 'partials/caveat_font.html' ignore missing %}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/design-tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}?v=22">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dochub-page.css') }}?v=25">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/ticketing.css') }}?v=22">
+  <link rel="stylesheet" href="{{ url_for('static', filename='mobile_responsive.css') }}">
+  <style>
+    .tkt-container { max-width: 1400px; padding-left: 28px; padding-right: 28px; }
+    .draft-intro {
+      background: var(--tkt-accent-50); border: 1px solid var(--tkt-accent-100); border-radius: 12px;
+      padding: 14px 18px; margin-bottom: 18px; font-size: .88rem; color: var(--tkt-accent-deep);
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+    .draft-intro svg { flex-shrink: 0; margin-top: 1px; color: var(--tkt-accent); }
+    .draft-sender { font-size: .78rem; color: var(--tkt-text-2); }
+    .draft-sender strong { color: var(--tkt-text); }
+    .draft-snippet {
+      font-size: .82rem; color: var(--tkt-text-2); max-width: 320px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+  </style>
+</head>
+<body class="tkt-dh-page has-main-nav">
+<div class="tkt-dh-app-root">
+{% set active_page = active_page | default('ticketing') %}
+{% include 'partials/main_navbar.html' with context %}
+<div class="dh-page-root tkt-dh-page-root">
+{% include 'partials/tkt_sidebar.html' with context %}
+<div class="tkt-dh-main">
+{% set tkt_topbar_title = 'Ticket drafts' %}
+{% include 'partials/tkt_topbar.html' with context %}
+<div class="tkt-content">
+
+  <div class="draft-intro">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" width="20" height="20"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z"/></svg>
+    <div>
+      These tickets were created and confirmed through <strong>Ask Kynvera</strong> (the chat assistant).
+      Nothing here has entered the active workflow yet — open <strong>Review &amp; Convert</strong> to check
+      the details and turn it into a real work order.
+    </div>
+  </div>
+
+  <div class="tkt-card">
+    <div class="tkt-card-body" style="padding:0;">
+      {% if drafts %}
+      <div class="tkt-table-wrap">
+        <table class="tkt-table">
+          <thead>
+            <tr>
+              <th>Ticket ID</th>
+              <th>Subject / Title</th>
+              <th>Reported by</th>
+              <th>Description</th>
+              <th>Created</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in drafts %}
+            <tr>
+              <td style="white-space:nowrap;font-weight:700;">{{ t.ticket_id }}</td>
+              <td style="max-width:220px;">
+                <span style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ t.title }}</span>
+              </td>
+              <td class="draft-sender">
+                <strong>{{ t.reporter.full_name if t.reporter else 'Unknown' }}</strong>
+              </td>
+              <td>
+                <span class="draft-snippet" title="{{ t.work_description }}">{{ t.work_description }}</span>
+              </td>
+              <td style="white-space:nowrap;font-size:.78rem;color:var(--tkt-text-3);">{{ t.created_at|tkt_datetime if t.created_at else '—' }}</td>
+              <td style="white-space:nowrap;">
+                {% if can_view_all %}
+                <a href="{{ url_for('ticketing.draft_ticket_review', ticket_id=t.ticket_id) }}"
+                   class="tkt-btn tkt-btn-primary tkt-btn-sm">Review &amp; Convert</a>
+                {% else %}
+                <a href="{{ url_for('ticketing.draft_ticket_review', ticket_id=t.ticket_id) }}"
+                   class="tkt-btn tkt-btn-sm">View</a>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="tkt-empty">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="56" height="56"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z"/></svg>
+        <p>No ticket drafts right now. Drafts created via Ask Kynvera will appear here.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div></div>{# tkt-content / tkt-dh-main #}
+</div></div>{# tkt-dh-page-root / tkt-dh-app-root #}
+
+<script src="{{ url_for('static', filename='js/ticketing.js') }}" defer></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
+<script>window.FILES_SAVE_MODULE = 'ticketing'; window.FILES_SAVE_MODULE_LABEL = 'Service Tickets';</script>
+<script src="{{ url_for('static', filename='js/files-save.js') }}?v=19"></script>
+<script>
+  function tktOpenMobileSidebar(){const s=document.getElementById('tktDhSidebar');if(s)s.classList.add('open');}
+  function tktCloseMobileSidebar(){const s=document.getElementById('tktDhSidebar');if(s)s.classList.remove('open');}
+  function tktToggleMobileSidebar(){const s=document.getElementById('tktDhSidebar');if(!s)return;s.classList.contains('open')?tktCloseMobileSidebar():tktOpenMobileSidebar();}
+  document.addEventListener('click',function(e){const s=document.getElementById('tktDhSidebar'),btn=document.getElementById('tktDhSidebarToggle');if(s&&s.classList.contains('open')&&!s.contains(e.target)&&btn&&!btn.contains(e.target))tktCloseMobileSidebar();});
+</script>
+</body>
+</html>

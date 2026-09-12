@@ -5,7 +5,6 @@
   'use strict';
 
   var HIDDEN_PATHS = ['/', '/login', '/register', '/forgot-password', '/reset-password'];
-  var MAX_HISTORY = 20;
   var DEFAULT_CHIPS = [
     'How many pending forms?',
     'My last leave',
@@ -15,10 +14,13 @@
 
   var root, fab, navBtn, panel, closeBtn, messagesEl, suggestionsEl, form, input, sendBtn;
   var infoBtn, infoOverlay, infoCloseBtn, infoCard;
+  var historyBtn, chatView, historyView, historyBackBtn, historyList, newChatBtn;
   var isOpen = false;
   var isLoading = false;
   var greeted = false;
   var infoOpen = false;
+  var historyOpen = false;
+  var currentSessionId = null;
 
   function isAuthenticatedPage() {
     var path = (window.location.pathname || '').replace(/\/$/, '') || '/';
@@ -283,7 +285,7 @@
       var response = await fetchFn(path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action_id: Number(actionId) }),
+        body: JSON.stringify({ action_id: Number(actionId), session_id: currentSessionId }),
       });
       typingEl.remove();
       if (!response || !response.ok) {
@@ -322,6 +324,25 @@
     setSuggestions(data.suggestions);
   }
 
+  function replayMessage(msg, isLast) {
+    if (msg.role === 'user') {
+      appendMessage('user', escapeHtml(msg.text || ''));
+      return;
+    }
+    var data = msg.payload || { message: msg.text || '' };
+    var html = escapeHtml(data.message || msg.text || '') + buildExtrasHtml(data);
+    appendMessage('bot', html);
+    if (isLast) setSuggestions(data.suggestions);
+  }
+
+  function replayMessages(messages) {
+    messagesEl.innerHTML = '';
+    (messages || []).forEach(function (msg, idx) {
+      replayMessage(msg, idx === messages.length - 1);
+    });
+    if (!messages || !messages.length) setSuggestions(DEFAULT_CHIPS);
+  }
+
   function setLoading(loading) {
     isLoading = loading;
     sendBtn.disabled = loading;
@@ -340,7 +361,7 @@
 
     try {
       var fetchFn = window.authenticatedFetch || window.fetch;
-      var body = { message: message || 'Please use these details.' };
+      var body = { message: message || 'Please use these details.', session_id: currentSessionId };
       if (extra.composer) body.composer = extra.composer;
       var response = await fetchFn('/api/assistant/chat', {
         method: 'POST',
@@ -362,8 +383,8 @@
 
       var result = await response.json();
       var data = result.data || result;
+      if (data.session_id != null) currentSessionId = data.session_id;
       renderBotResponse(data);
-      persistHistory(message, data);
     } catch (err) {
       typingEl.remove();
       appendMessage('bot', 'Unable to reach the assistant. Check your connection and try again.');
@@ -372,18 +393,6 @@
       setLoading(false);
       input.focus();
     }
-  }
-
-  function persistHistory(userMsg, botData) {
-    try {
-      var raw = sessionStorage.getItem('injaaz_assistant_history');
-      var history = raw ? JSON.parse(raw) : [];
-      history.push({ user: userMsg, bot: botData });
-      if (history.length > MAX_HISTORY) {
-        history = history.slice(history.length - MAX_HISTORY);
-      }
-      sessionStorage.setItem('injaaz_assistant_history', JSON.stringify(history));
-    } catch (e) { /* ignore */ }
   }
 
   function showWelcomeIfNeeded() {
@@ -420,13 +429,36 @@
     }
   }
 
+  async function loadCurrentSession() {
+    if (greeted) return;
+    try {
+      var fetchFn = window.authenticatedFetch || window.fetch;
+      var response = await fetchFn('/api/assistant/sessions/current');
+      if (!response || !response.ok) {
+        showWelcomeIfNeeded();
+        return;
+      }
+      var result = await response.json();
+      var data = result.data || result;
+      if (data.session && data.messages && data.messages.length) {
+        greeted = true;
+        currentSessionId = data.session.session_id;
+        replayMessages(data.messages);
+      } else {
+        showWelcomeIfNeeded();
+      }
+    } catch (e) {
+      showWelcomeIfNeeded();
+    }
+  }
+
   function openPanel() {
     ensureBodyMount();
     isOpen = true;
     root.classList.add('is-open');
     root.setAttribute('aria-hidden', 'false');
     setTriggerExpanded(true);
-    showWelcomeIfNeeded();
+    loadCurrentSession();
     setTimeout(function () {
       try {
         input.focus({ preventScroll: true });
@@ -438,6 +470,7 @@
 
   function closePanel() {
     closeInfo();
+    closeHistory();
     isOpen = false;
     root.classList.remove('is-open');
     root.setAttribute('aria-hidden', 'true');
@@ -472,6 +505,127 @@
     }
   }
 
+  function formatDateTime(isoString) {
+    if (!isoString) return '';
+    var iso = isoString + (isoString.indexOf('Z') === -1 && isoString.indexOf('+') === -1 ? 'Z' : '');
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var day = String(d.getDate()).padStart(2, '0');
+    var month = d.toLocaleString('en-US', { month: 'short' });
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    return day + ' ' + month + ' ' + d.getFullYear() + ', ' + hh + ':' + mm;
+  }
+
+  async function startNewChat() {
+    if (isLoading) return;
+    try {
+      var fetchFn = window.authenticatedFetch || window.fetch;
+      await fetchFn('/api/assistant/sessions/new', { method: 'POST' });
+    } catch (e) { /* best effort — a fresh session still starts on the next message */ }
+    currentSessionId = null;
+    greeted = false;
+    messagesEl.innerHTML = '';
+    closeHistory();
+    showWelcomeIfNeeded();
+    if (input) input.focus();
+  }
+
+  async function loadHistoryList() {
+    if (!historyList) return;
+    historyList.innerHTML = '<p class="injaaz-assistant-history-empty">Loading…</p>';
+    try {
+      var fetchFn = window.authenticatedFetch || window.fetch;
+      var response = await fetchFn('/api/assistant/sessions');
+      if (!response || !response.ok) {
+        historyList.innerHTML = '<p class="injaaz-assistant-history-empty">Could not load chat history.</p>';
+        return;
+      }
+      var result = await response.json();
+      var data = result.data || result;
+      var sessions = data.sessions || [];
+      if (!sessions.length) {
+        historyList.innerHTML = '<p class="injaaz-assistant-history-empty">No past conversations yet.</p>';
+        return;
+      }
+      historyList.innerHTML = '';
+      sessions.forEach(function (s) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'injaaz-assistant-history-item';
+        if (s.session_id === currentSessionId) btn.setAttribute('aria-current', 'true');
+        var title = document.createElement('span');
+        title.className = 'injaaz-assistant-history-item-title';
+        title.textContent = s.title || s.preview || 'New chat';
+        btn.appendChild(title);
+        var summaryText = s.summary || (s.title ? '' : s.preview) || '';
+        if (summaryText) {
+          var summary = document.createElement('span');
+          summary.className = 'injaaz-assistant-history-item-summary';
+          summary.textContent = summaryText;
+          btn.appendChild(summary);
+        }
+        var meta = document.createElement('span');
+        meta.className = 'injaaz-assistant-history-item-meta';
+        meta.textContent = formatDateTime(s.last_active_at) + (s.message_count ? ' · ' + s.message_count + ' messages' : '');
+        btn.appendChild(meta);
+        btn.addEventListener('click', function () {
+          openSession(s.session_id);
+        });
+        historyList.appendChild(btn);
+      });
+    } catch (e) {
+      historyList.innerHTML = '<p class="injaaz-assistant-history-empty">Could not load chat history.</p>';
+      console.error('Assistant history error:', e);
+    }
+  }
+
+  async function openSession(sessionId) {
+    try {
+      var fetchFn = window.authenticatedFetch || window.fetch;
+      var response = await fetchFn('/api/assistant/sessions/' + encodeURIComponent(sessionId) + '/messages');
+      if (!response || !response.ok) return;
+      var result = await response.json();
+      var data = result.data || result;
+      currentSessionId = sessionId;
+      greeted = true;
+      replayMessages(data.messages || []);
+      closeHistory();
+      if (input) input.focus();
+    } catch (e) {
+      console.error('Assistant open session error:', e);
+    }
+  }
+
+  function openHistory() {
+    if (!historyView || !chatView) return;
+    historyOpen = true;
+    chatView.hidden = true;
+    historyView.hidden = false;
+    if (historyBtn) historyBtn.setAttribute('aria-expanded', 'true');
+    loadHistoryList();
+    setTimeout(function () {
+      if (historyBackBtn) {
+        try { historyBackBtn.focus({ preventScroll: true }); } catch (e) { historyBackBtn.focus(); }
+      }
+    }, 50);
+  }
+
+  function closeHistory() {
+    if (!historyView || !chatView || historyView.hidden) {
+      historyOpen = false;
+      if (historyBtn) historyBtn.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    historyOpen = false;
+    historyView.hidden = true;
+    chatView.hidden = false;
+    if (historyBtn) {
+      historyBtn.setAttribute('aria-expanded', 'false');
+      historyBtn.focus();
+    }
+  }
+
   function init() {
     root = document.getElementById('injaazAssistant');
     if (!root) return;
@@ -486,6 +640,12 @@
     infoOverlay = document.getElementById('assistantInfoOverlay');
     infoCloseBtn = document.getElementById('assistantInfoClose');
     infoCard = infoOverlay ? infoOverlay.querySelector('.injaaz-assistant-info-card') : null;
+    newChatBtn = document.getElementById('assistantNewChatBtn');
+    historyBtn = document.getElementById('assistantHistoryBtn');
+    chatView = document.getElementById('assistantChatView');
+    historyView = document.getElementById('assistantHistoryView');
+    historyBackBtn = document.getElementById('assistantHistoryBack');
+    historyList = document.getElementById('assistantHistoryList');
     messagesEl = document.getElementById('assistantMessages');
     suggestionsEl = document.getElementById('assistantSuggestions');
     form = document.getElementById('assistantForm');
@@ -523,6 +683,17 @@
       });
     }
 
+    if (newChatBtn) newChatBtn.addEventListener('click', startNewChat);
+
+    if (historyBtn) {
+      historyBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (historyOpen) closeHistory();
+        else openHistory();
+      });
+    }
+    if (historyBackBtn) historyBackBtn.addEventListener('click', closeHistory);
+
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       sendMessage(input.value);
@@ -533,6 +704,11 @@
 
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
+      if (historyOpen) {
+        e.preventDefault();
+        closeHistory();
+        return;
+      }
       if (infoOpen) {
         e.preventDefault();
         closeInfo();

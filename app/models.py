@@ -2565,6 +2565,77 @@ class AssistantPendingAction(db.Model):
         return f'<AssistantPendingAction {self.id} {self.action_type} {self.status}>'
 
 
+class AssistantChatSession(db.Model):
+    """One Ask Kynvera conversation. Rolls over to a new session after
+    SESSION_IDLE_MINUTES of inactivity (see module_assistant/sessions.py)."""
+    __tablename__ = 'assistant_chat_sessions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    title = db.Column(db.String(120), nullable=True)
+    summary = db.Column(db.String(200), nullable=True)
+    started_at = db.Column(db.DateTime, default=_utcnow, index=True)
+    last_active_at = db.Column(db.DateTime, default=_utcnow, index=True)
+    ended_at = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(20), default='active', index=True)  # active, closed
+
+    user = db.relationship(
+        'User',
+        foreign_keys=[user_id],
+        backref=db.backref('assistant_chat_sessions', cascade='all, delete-orphan'),
+    )
+
+    def to_public_dict(self):
+        return {
+            'session_id': self.id,
+            'title': self.title or 'New chat',
+            'summary': self.summary or '',
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'last_active_at': self.last_active_at.isoformat() if self.last_active_at else None,
+            'status': self.status,
+        }
+
+    def __repr__(self):
+        return f'<AssistantChatSession {self.id} user={self.user_id} {self.status}>'
+
+
+class AssistantChatMessage(db.Model):
+    """A single user/bot turn within an AssistantChatSession."""
+    __tablename__ = 'assistant_chat_messages'
+
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(
+        db.Integer,
+        db.ForeignKey('assistant_chat_sessions.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    role = db.Column(db.String(10), nullable=False)  # user, bot
+    text = db.Column(db.Text, nullable=True)
+    payload = db.Column(JSON, nullable=True)  # full structured bot payload (cards/suggestions/etc)
+    created_at = db.Column(db.DateTime, default=_utcnow, index=True)
+
+    session = db.relationship(
+        'AssistantChatSession',
+        foreign_keys=[session_id],
+        backref=db.backref(
+            'messages', cascade='all, delete-orphan',
+            order_by='AssistantChatMessage.created_at',
+        ),
+    )
+
+    def to_public_dict(self):
+        return {
+            'role': self.role,
+            'text': self.text,
+            'payload': self.payload,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<AssistantChatMessage {self.id} session={self.session_id} {self.role}>'
+
+
 class TicketNote(db.Model):
     """Live notes / activity on a ticket"""
     __tablename__ = 'ticket_notes'

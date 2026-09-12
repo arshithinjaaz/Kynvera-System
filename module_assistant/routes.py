@@ -147,28 +147,42 @@ def chat():
         data = request.get_json(force=True, silent=True) or {}
         message = (data.get('message') or '').strip()
         composer = data.get('composer') if isinstance(data.get('composer'), dict) else None
+        requested_session_id = data.get('session_id')
         if not message and not composer:
             return error_response('Message is required', status_code=400, error_code='VALIDATION_ERROR')
         if not message:
             message = 'Please use these details.'
 
+        from module_assistant.sessions import (
+            ensure_session_title,
+            record_message,
+            resume_or_create_session,
+            touch_session,
+        )
+        session = resume_or_create_session(user, requested_session_id)
+        record_message(session, 'user', message)
+
         if composer:
             from module_assistant.actions import propose_from_composer
             payload = propose_from_composer(user, composer)
             payload.setdefault('confidence', 1.0)
-            return success_response(payload)
-
-        if is_llm_enabled():
+        elif is_llm_enabled():
             from module_assistant.agent import run_agent
             from module_assistant.llm import StructuredLLMError
             try:
                 payload = run_agent(user, message)
                 payload.setdefault('confidence', 1.0)
-                return success_response(payload)
             except StructuredLLMError as exc:
                 logger.warning('Agent LLM unavailable, using intent fallback: %s', exc)
+                payload = _intent_chat(user, message)
+        else:
+            payload = _intent_chat(user, message)
 
-        payload = _intent_chat(user, message)
+        record_message(session, 'bot', payload.get('message'), payload)
+        touch_session(session)
+        ensure_session_title(session, message, payload.get('message'))
+        payload['session_id'] = session.id
+        db.session.commit()
         return success_response(payload)
 
     except Exception as e:
@@ -212,6 +226,7 @@ def confirm_action():
             suggestions=['How many pending forms?', 'My last leave', 'My tickets'],
         )
         payload['confidence'] = 1.0
+        _record_in_session(user, data.get('session_id'), payload)
         return success_response(payload)
     except Exception as e:
         logger.error('Assistant confirm error: %s', e, exc_info=True)
@@ -253,7 +268,115 @@ def cancel_action():
             suggestions=['Create a ticket draft', 'Save a leave draft', 'My last leave'],
         )
         payload['confidence'] = 1.0
+        _record_in_session(user, data.get('session_id'), payload)
         return success_response(payload)
     except Exception as e:
         logger.error('Assistant cancel error: %s', e, exc_info=True)
         return error_response('Could not cancel that action', status_code=500, error_code='INTERNAL_ERROR')
+
+
+def _record_in_session(user, requested_session_id, payload: dict) -> None:
+    """Best-effort: log a confirm/cancel outcome into its chat session, if any."""
+    if requested_session_id is None:
+        return
+    try:
+        from module_assistant.sessions import get_owned_session, record_message, touch_session
+        session = get_owned_session(requested_session_id, user)
+        if not session:
+            return
+        record_message(session, 'bot', payload.get('message'), payload)
+        touch_session(session)
+        db.session.commit()
+    except Exception:
+        logger.warning('Could not record confirm/cancel outcome in session', exc_info=True)
+
+
+@assistant_bp.route('/sessions/new', methods=['POST'])
+@jwt_required()
+def start_new_session():
+    """Explicitly archive the current live session (if any) so the next message starts a fresh one."""
+    try:
+        user = _current_user()
+        if not user:
+            return error_response('User not found', status_code=404, error_code='NOT_FOUND')
+
+        from module_assistant.sessions import close_live_session
+        closed = close_live_session(user)
+        db.session.commit()
+        return success_response({'closed_session_id': closed.id if closed else None})
+    except Exception as e:
+        logger.error('Assistant new-session error: %s', e, exc_info=True)
+        return error_response('Could not start a new chat', status_code=500, error_code='INTERNAL_ERROR')
+
+
+@assistant_bp.route('/sessions/current', methods=['GET'])
+@jwt_required()
+def current_session():
+    """Read-only: the user's live session (still inside the idle window), if any."""
+    try:
+        user = _current_user()
+        if not user:
+            return error_response('User not found', status_code=404, error_code='NOT_FOUND')
+
+        from module_assistant.sessions import get_live_session
+        session = get_live_session(user)
+        if not session:
+            return success_response({'session': None, 'messages': []})
+
+        messages = [m.to_public_dict() for m in session.messages]
+        return success_response({'session': session.to_public_dict(), 'messages': messages})
+    except Exception as e:
+        logger.error('Assistant current session error: %s', e, exc_info=True)
+        return error_response('Could not load the assistant session', status_code=500, error_code='INTERNAL_ERROR')
+
+
+@assistant_bp.route('/sessions', methods=['GET'])
+@jwt_required()
+def list_sessions():
+    """Past conversations for the history panel, newest first."""
+    try:
+        user = _current_user()
+        if not user:
+            return error_response('User not found', status_code=404, error_code='NOT_FOUND')
+
+        from app.models import AssistantChatSession
+
+        rows = (
+            AssistantChatSession.query
+            .filter_by(user_id=user.id)
+            .order_by(AssistantChatSession.last_active_at.desc())
+            .limit(50)
+            .all()
+        )
+        sessions = []
+        for row in rows:
+            data = row.to_public_dict()
+            first_user_msg = next((m for m in row.messages if m.role == 'user'), None)
+            data['preview'] = row.summary or (first_user_msg.text if first_user_msg else '') or ''
+            data['message_count'] = len(row.messages)
+            sessions.append(data)
+        return success_response({'sessions': sessions})
+    except Exception as e:
+        logger.error('Assistant list sessions error: %s', e, exc_info=True)
+        return error_response('Could not load chat history', status_code=500, error_code='INTERNAL_ERROR')
+
+
+@assistant_bp.route('/sessions/<int:session_id>/messages', methods=['GET'])
+@jwt_required()
+def session_messages(session_id):
+    """Full transcript of one past conversation (owner-only)."""
+    try:
+        user = _current_user()
+        if not user:
+            return error_response('User not found', status_code=404, error_code='NOT_FOUND')
+
+        from module_assistant.sessions import get_owned_session
+        session = get_owned_session(session_id, user)
+        if not session:
+            return error_response('Session not found', status_code=404, error_code='NOT_FOUND')
+
+        messages = [m.to_public_dict() for m in session.messages]
+        return success_response({'session': session.to_public_dict(), 'messages': messages})
+    except Exception as e:
+        logger.error('Assistant session messages error: %s', e, exc_info=True)
+        return error_response('Could not load that conversation', status_code=500, error_code='INTERNAL_ERROR')

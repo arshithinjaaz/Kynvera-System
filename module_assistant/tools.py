@@ -731,3 +731,325 @@ def get_fm_maintenance_report_hint(user):
             '(PDF/Excel). Ticket-level PDFs are available from each work order page.'
         ),
     }
+
+
+def get_sites_overview(user):
+    """Active projects/sites and their properties, company-wide (Ticketing module)."""
+    if not (getattr(user, 'access_ticketing', False) or getattr(user, 'role', None) == 'admin'):
+        return {'allowed': False, 'projects': [], 'total_projects': 0, 'total_properties': 0, 'standalone_properties': 0}
+    try:
+        from app.models import TicketProject, TicketProperty
+
+        projects = TicketProject.query.filter_by(is_active=True).order_by(TicketProject.name).all()
+        standalone = TicketProperty.query.filter_by(project_id=None, is_active=True).count()
+        rows = []
+        total_properties = standalone
+        for p in projects:
+            count = p.properties.filter_by(is_active=True).count()
+            total_properties += count
+            rows.append({
+                'name': p.name,
+                'client_name': p.client_name or '',
+                'properties_count': count,
+            })
+        return {
+            'allowed': True,
+            'total_projects': len(rows),
+            'total_properties': total_properties,
+            'standalone_properties': standalone,
+            'projects': rows[:30],
+        }
+    except Exception:
+        return {'allowed': True, 'total_projects': 0, 'total_properties': 0, 'standalone_properties': 0, 'projects': []}
+
+
+def get_zones_overview(user, property_name=None):
+    """Zones (and sub-zones) for a property, or a zone-count summary per property
+    when no property_name is given. Keep this tool's answer scoped to exactly what
+    was asked — do not fall back to get_sites_overview for zone questions."""
+    if not (getattr(user, 'access_ticketing', False) or getattr(user, 'role', None) == 'admin'):
+        return {'allowed': False}
+    property_name = (property_name or '').strip()
+    try:
+        from app.models import TicketProperty, TicketZone
+
+        if property_name:
+            prop = TicketProperty.query.filter(
+                TicketProperty.is_active.is_(True),
+                TicketProperty.name.ilike(f'%{property_name}%'),
+            ).first()
+            if not prop:
+                return {'allowed': True, 'found': False, 'query': property_name}
+            zones = (
+                TicketZone.query.filter_by(property_id=prop.id, is_active=True)
+                .order_by(TicketZone.name).limit(50).all()
+            )
+            zone_rows = []
+            for z in zones:
+                sub_zones = list(z.sub_zones.filter_by(is_active=True).order_by('name').limit(20))
+                zone_rows.append({
+                    'name': z.name,
+                    'sub_zones': [sz.name for sz in sub_zones],
+                })
+            return {
+                'allowed': True, 'found': True,
+                'property_name': prop.name,
+                'zone_count': len(zone_rows),
+                'zones': zone_rows,
+            }
+
+        properties = TicketProperty.query.filter_by(is_active=True).order_by(TicketProperty.name).all()
+        rows = [
+            {
+                'property_name': p.name,
+                'zone_count': TicketZone.query.filter_by(property_id=p.id, is_active=True).count(),
+            }
+            for p in properties
+        ]
+        return {'allowed': True, 'found': True, 'by_property': rows}
+    except Exception:
+        return {'allowed': True, 'found': False}
+
+
+def get_device_inventory(user):
+    """Company-wide IT device inventory (admin only)."""
+    if getattr(user, 'role', None) != 'admin':
+        return {'allowed': False}
+    try:
+        from module_devices.service import compute_device_kpis
+        kpis = compute_device_kpis()
+        kpis['allowed'] = True
+        return kpis
+    except Exception:
+        return {'allowed': True, 'total': 0}
+
+
+MATERIAL_DEPARTMENTS = ('HVAC', 'Cleaning', 'Electrical', 'Plumbing')
+
+
+def get_material_stock(user, material_name=None, department=None):
+    """Procurement catalog + live stock on hand (ProcStock.qty_on_hand), optionally
+    filtered by material name (fuzzy match) or department (e.g. HVAC)."""
+    if not (getattr(user, 'access_procurement_module', False) or getattr(user, 'role', None) == 'admin'):
+        return {'allowed': False, 'items': []}
+    material_name = (material_name or '').strip()
+    department = (department or '').strip()
+    try:
+        from app.models import db
+        from module_procurement.models import ProcCatalogItem, ProcStock
+        from sqlalchemy import func
+
+        def _qty_on_hand(item):
+            total = db.session.query(func.coalesce(func.sum(ProcStock.qty_on_hand), 0.0)).filter(
+                ProcStock.catalog_item_id == item.id
+            ).scalar()
+            return float(total or 0.0)
+
+        if material_name:
+            items = ProcCatalogItem.query.filter(
+                ProcCatalogItem.name.ilike(f'%{material_name}%')
+            ).limit(20).all()
+            matches = [
+                {
+                    'name': i.name,
+                    'department': i.department,
+                    'uom': i.uom or 'PCS',
+                    'qty_on_hand': _qty_on_hand(i),
+                }
+                for i in items
+            ]
+            return {
+                'allowed': True, 'mode': 'material_lookup', 'query': material_name,
+                'matches': matches, 'count': len(matches),
+            }
+
+        if department:
+            dept_label = next(
+                (d for d in MATERIAL_DEPARTMENTS if d.lower() == department.lower()),
+                department,
+            )
+            items = ProcCatalogItem.query.filter(ProcCatalogItem.department.ilike(dept_label)).all()
+            rows = [{'name': i.name, 'uom': i.uom or 'PCS', 'qty_on_hand': _qty_on_hand(i)} for i in items]
+            return {
+                'allowed': True, 'mode': 'department', 'department': dept_label,
+                'item_count': len(rows),
+                'total_qty_on_hand': sum(r['qty_on_hand'] for r in rows),
+                'items': rows[:30],
+            }
+
+        rows = (
+            db.session.query(ProcCatalogItem.department, func.count(ProcCatalogItem.id))
+            .group_by(ProcCatalogItem.department)
+            .all()
+        )
+        by_department = [{'department': d, 'item_count': c} for d, c in rows]
+        return {
+            'allowed': True, 'mode': 'overview',
+            'total_catalog_items': sum(c for _, c in rows),
+            'by_department': by_department,
+        }
+    except Exception:
+        return {'allowed': True, 'mode': 'error', 'items': []}
+
+
+def get_bd_pipeline_summary(user):
+    """BD/CRM sales pipeline — stage/value breakdown, win rate, renewals, overdue follow-ups."""
+    from app.middleware import user_has_bd_access, user_sees_all_bd_deals
+
+    if not user_has_bd_access(user):
+        return {'allowed': False}
+    try:
+        from app.models import BDFollowUp, BDProject
+
+        scoped_to_self = not user_sees_all_bd_deals(user)
+        q = BDProject.query
+        if scoped_to_self:
+            q = q.filter(BDProject.owner_user_id == user.id)
+        projects = q.all()
+
+        stage_stats = {}
+        total_value = 0.0
+        won = lost = 0
+        for p in projects:
+            stage = p.stage or 'prospecting'
+            entry = stage_stats.setdefault(stage, {'count': 0, 'value': 0.0})
+            entry['count'] += 1
+            entry['value'] += float(p.value_amount or 0)
+            total_value += float(p.value_amount or 0)
+            if p.status == 'won':
+                won += 1
+            elif p.status == 'lost':
+                lost += 1
+        under_renewal = sum(1 for p in projects if p.status == 'under_renewal')
+        win_rate = round(100.0 * won / (won + lost), 1) if (won + lost) else None
+
+        fu_q = BDFollowUp.query.filter(BDFollowUp.status == 'open')
+        if scoped_to_self:
+            fu_q = fu_q.filter(BDFollowUp.created_by == user.id)
+        overdue = fu_q.filter(
+            BDFollowUp.due_at.isnot(None), BDFollowUp.due_at < datetime.utcnow()
+        ).count()
+
+        return {
+            'allowed': True,
+            'scope': 'own' if scoped_to_self else 'company_wide',
+            'total_deals': len(projects),
+            'total_pipeline_value': round(total_value, 2),
+            'by_stage': [{'stage': s, **v} for s, v in stage_stats.items()],
+            'won': won, 'lost': lost, 'win_rate_pct': win_rate,
+            'under_renewal': under_renewal,
+            'overdue_followups': overdue,
+        }
+    except Exception:
+        return {'allowed': True, 'total_deals': 0}
+
+
+def get_qhsi_summary(user):
+    """QHSI (Quality, Hospitality, Safety & Inspection) submissions, staff-compliance,
+    and training counts — company-wide for admins, own data otherwise."""
+    if not (getattr(user, 'role', None) == 'admin' or getattr(user, 'access_qhsi', False)):
+        return {'allowed': False}
+    try:
+        from module_qhsi.routes import _qhse_sidebar_stats
+        stats = _qhse_sidebar_stats(user)
+        stats['allowed'] = True
+        return stats
+    except Exception:
+        return {'allowed': True, 'total': 0}
+
+
+def get_mmr_status(user):
+    """Report Generation (MMR) dispatch-cycle status. This tracks the approve/send
+    cycle only — there is no per-workorder report content stored in the database
+    (reports are Excel uploads processed in memory), so do not claim line-item detail."""
+    if not (getattr(user, 'role', None) == 'admin' or getattr(user, 'access_report_generation', False)):
+        return {'allowed': False}
+    try:
+        from module_mmr.routes import _current_cycle_status, _is_current_cycle_approved, recent_sent_cycles
+        return {
+            'allowed': True,
+            'current_cycle': _current_cycle_status(),
+            'current_cycle_approved': _is_current_cycle_approved(),
+            'recent_sent_cycles': recent_sent_cycles(limit=5),
+        }
+    except Exception:
+        return {'allowed': True, 'current_cycle': None, 'recent_sent_cycles': []}
+
+
+INSPECTION_MODULE_TYPES_ALL = ('hvac_mep', 'civil', 'cleaning', 'hvac', 'inspection')
+
+
+def get_inspection_activity(user):
+    """Company-wide inspection submission counts. No pass/fail or score field exists
+    anywhere in this system — checklist answers are unstructured JSON, so never claim
+    a pass/fail figure."""
+    if not (
+        getattr(user, 'role', None) == 'admin'
+        or getattr(user, 'access_hvac', False)
+        or getattr(user, 'access_civil', False)
+        or getattr(user, 'access_cleaning', False)
+    ):
+        return {'allowed': False}
+    try:
+        now = datetime.utcnow()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        rows = Submission.query.filter(Submission.module_type.in_(INSPECTION_MODULE_TYPES_ALL)).all()
+        by_type = {}
+        this_month = 0
+        for s in rows:
+            by_type[s.module_type] = by_type.get(s.module_type, 0) + 1
+            if s.created_at and s.created_at >= month_start:
+                this_month += 1
+        return {
+            'allowed': True,
+            'total': len(rows),
+            'this_month': this_month,
+            'by_type': by_type,
+        }
+    except Exception:
+        return {'allowed': True, 'total': 0}
+
+
+def get_hr_overview(user):
+    """Company-wide HR headcount, form volume, and leave-type breakdown
+    (HR staff, GM, or admin only)."""
+    try:
+        from module_hr.routes import _user_sees_org_wide_approved_hr
+        allowed = _user_sees_org_wide_approved_hr(user)
+    except Exception:
+        allowed = getattr(user, 'role', None) == 'admin'
+    if not allowed:
+        return {'allowed': False}
+    try:
+        from app.models import User as UserModel
+        from module_hr.routes import _HR_FINISHED_STATUSES
+
+        active = UserModel.query.filter_by(is_active=True).count()
+        inactive = UserModel.query.filter_by(is_active=False).count()
+        by_designation = {}
+        for u in UserModel.query.filter_by(is_active=True).all():
+            d = u.designation or 'unspecified'
+            by_designation[d] = by_designation.get(d, 0) + 1
+
+        hr_rows = Submission.query.filter(Submission.module_type.startswith('hr_')).all()
+        finished = sum(1 for s in hr_rows if (s.workflow_status or s.status) in _HR_FINISHED_STATUSES)
+        leave_rows = [s for s in hr_rows if s.module_type in HR_LEAVE_MODULE_TYPES]
+        by_leave_type = {}
+        for s in leave_rows:
+            fd = _parse_form_data(s.form_data)
+            lt = (fd.get('leave_type') or '').strip().lower() or 'unspecified'
+            by_leave_type[lt] = by_leave_type.get(lt, 0) + 1
+
+        return {
+            'allowed': True,
+            'active_employees': active,
+            'inactive_employees': inactive,
+            'by_designation': by_designation,
+            'hr_forms_total': len(hr_rows),
+            'hr_forms_finished': finished,
+            'hr_forms_pending': len(hr_rows) - finished,
+            'leave_applications_total': len(leave_rows),
+            'by_leave_type': by_leave_type,
+        }
+    except Exception:
+        return {'allowed': True, 'active_employees': 0}

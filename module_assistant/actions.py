@@ -327,7 +327,7 @@ def _execute_create_ticket(user, fields: dict) -> dict:
         'ticket_id': ticket.ticket_id,
         'actions': [
             {'label': f'Open {ticket.ticket_id}', 'href': href, 'kind': 'link'},
-            {'label': 'Ticket drafts', 'href': '/tickets/drafts', 'kind': 'link'},
+            {'label': 'Ticket drafts', 'href': '/tickets/drafts/assistant', 'kind': 'link'},
         ],
     }
 

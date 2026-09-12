@@ -713,8 +713,14 @@ def _can_view_draft_tickets(user: User) -> bool:
     return _user_in_supervisor_pool(user)
 
 
-def _draft_tickets_query():
-    return Ticket.query.filter(Ticket.status == 'draft')
+def _email_draft_tickets_query():
+    """Draft tickets created by email intake — excludes Ask Kynvera drafts."""
+    return Ticket.query.filter(Ticket.status == 'draft', Ticket.source != 'assistant')
+
+
+def _assistant_draft_tickets_query():
+    """Draft tickets created via the Ask Kynvera chat assistant."""
+    return Ticket.query.filter(Ticket.status == 'draft', Ticket.source == 'assistant')
 
 
 def _can_user_view_ticket(user: User, ticket: Ticket) -> bool:
@@ -964,10 +970,15 @@ def _get_sidebar_stats(user: User) -> dict:
     statuses = [t[0] for t in q.with_entities(Ticket.status).all()]
     active_ct = sum(1 for s in statuses if s in _ACTIVE_STATUSES)
     can_view_drafts = _can_view_draft_tickets(user)
-    draft_ct = _draft_tickets_query().count() if can_view_drafts else 0
+    draft_ct = _email_draft_tickets_query().count() if can_view_drafts else 0
+    own_assistant_draft_ct = _assistant_draft_tickets_query().filter(Ticket.reporter_id == user.id).count()
+    can_view_ticket_drafts = can_view_drafts or own_assistant_draft_ct > 0
+    assistant_draft_ct = _assistant_draft_tickets_query().count() if can_view_drafts else own_assistant_draft_ct
     return {
-        'draft':            draft_ct,
-        'can_view_drafts':  can_view_drafts,
+        'draft':                  draft_ct,
+        'can_view_drafts':        can_view_drafts,
+        'assistant_draft':        assistant_draft_ct,
+        'can_view_ticket_drafts': can_view_ticket_drafts,
         'total':            len(statuses),
         'active':           active_ct,
         # Open queue = open + supervisor queue (new WOs land as pending_supervisor)
@@ -1237,7 +1248,7 @@ def dashboard():
     completed_ct = closed_ct + resolved_ct  # work finished (may still await sign-off)
 
     can_view_drafts = _can_view_draft_tickets(user)
-    draft_ct = _draft_tickets_query().count() if can_view_drafts else 0
+    draft_ct = _email_draft_tickets_query().count() if can_view_drafts else 0
 
     stats = {
         'draft': draft_ct,
@@ -1431,7 +1442,7 @@ def draft_tickets():
     if not _can_view_draft_tickets(user):
         abort(403)
 
-    drafts = _draft_tickets_query().order_by(Ticket.created_at.desc()).all()
+    drafts = _email_draft_tickets_query().order_by(Ticket.created_at.desc()).all()
 
     # ── Email intake history: every inbound email, converted or not, so
     # supervisors can see the whole received → converted funnel instead of
@@ -1513,6 +1524,34 @@ def draft_tickets():
         intake_date_to=date_to_raw,
         intake_search_q=search_q,
         intake_truncated=intake_truncated,
+        sidebar_stats=_get_sidebar_stats(user),
+        active_page='ticketing',
+    )
+
+
+# ---------------------------------------------------------------------------
+# Draft tickets (Ask Kynvera chat-assistant inbox)
+# ---------------------------------------------------------------------------
+
+@ticketing_bp.route('/drafts/assistant', methods=['GET'])
+@jwt_required()
+def assistant_draft_tickets():
+    user = _current_user()
+    if not _has_access(user):
+        abort(403)
+
+    can_view_all = _can_view_draft_tickets(user)
+    query = _assistant_draft_tickets_query()
+    if not can_view_all:
+        query = query.filter(Ticket.reporter_id == user.id)
+
+    drafts = query.order_by(Ticket.created_at.desc()).all()
+
+    return render_template(
+        'ticket_drafts_assistant.html',
+        user=user,
+        drafts=drafts,
+        can_view_all=can_view_all,
         sidebar_stats=_get_sidebar_stats(user),
         active_page='ticketing',
     )

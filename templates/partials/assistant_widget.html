@@ -1,5 +1,5 @@
 {# Kynvera Live Assistant — floating chat widget (authenticated pages only) #}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css') }}?v=16">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css') }}?v=19">
 <div id="injaazAssistant" class="injaaz-assistant" aria-hidden="true" data-assistant-root>
   <button type="button" class="injaaz-assistant-fab" id="assistantFab" aria-label="Open Kynvera assistant" title="Kynvera Assistant">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
@@ -15,6 +15,17 @@
         <span class="injaaz-assistant-subtitle">Here to help</span>
       </div>
       <div class="injaaz-assistant-header-actions">
+        <button type="button" class="injaaz-assistant-close" id="assistantNewChatBtn" aria-label="New chat" title="New chat">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+        </button>
+        <button type="button" class="injaaz-assistant-close" id="assistantHistoryBtn" aria-label="Chat history" title="Chat history" aria-expanded="false" aria-controls="assistantHistoryView">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 3v5h-5" />
+          </svg>
+        </button>
         <button type="button" class="injaaz-assistant-close" id="assistantInfoBtn" aria-label="About Ask Kynvera" title="About Ask Kynvera" aria-expanded="false" aria-controls="assistantInfoOverlay">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
@@ -28,26 +39,40 @@
       </div>
     </header>
 
-    <div class="injaaz-assistant-messages" id="assistantMessages" aria-live="polite"></div>
+    <div class="injaaz-assistant-chat-view" id="assistantChatView">
+      <div class="injaaz-assistant-messages" id="assistantMessages" aria-live="polite"></div>
 
-    <div class="injaaz-assistant-suggestions" id="assistantSuggestions"></div>
+      <div class="injaaz-assistant-suggestions" id="assistantSuggestions"></div>
 
-    <form class="injaaz-assistant-input-row" id="assistantForm">
-      <input
-        type="text"
-        id="assistantInput"
-        class="injaaz-assistant-input"
-        placeholder="Ask about leave, tickets, documents…"
-        autocomplete="off"
-        maxlength="500"
-        aria-label="Message to assistant"
-      >
-      <button type="submit" class="injaaz-assistant-send" id="assistantSend" aria-label="Send message">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M6 12 18 12M12 6l6 6-6 6" />
-        </svg>
-      </button>
-    </form>
+      <form class="injaaz-assistant-input-row" id="assistantForm">
+        <input
+          type="text"
+          id="assistantInput"
+          class="injaaz-assistant-input"
+          placeholder="Ask about leave, tickets, documents…"
+          autocomplete="off"
+          maxlength="500"
+          aria-label="Message to assistant"
+        >
+        <button type="submit" class="injaaz-assistant-send" id="assistantSend" aria-label="Send message">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 12 18 12M12 6l6 6-6 6" />
+          </svg>
+        </button>
+      </form>
+    </div>
+
+    <div class="injaaz-assistant-history-view" id="assistantHistoryView" hidden>
+      <div class="injaaz-assistant-history-view-head">
+        <button type="button" class="injaaz-assistant-history-back" id="assistantHistoryBack">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+          </svg>
+          Back to chat
+        </button>
+      </div>
+      <div class="injaaz-assistant-history-list" id="assistantHistoryList"></div>
+    </div>
   </div>
 
   <div class="injaaz-assistant-info-overlay" id="assistantInfoOverlay" hidden>
@@ -115,5 +140,6 @@
       </div>
     </div>
   </div>
+
 </div>
-<script src="{{ url_for('static', filename='js/assistant.js') }}?v=9" defer></script>
+<script src="{{ url_for('static', filename='js/assistant.js') }}?v=13" defer></script>

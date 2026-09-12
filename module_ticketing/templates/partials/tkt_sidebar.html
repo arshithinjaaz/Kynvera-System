@@ -15,6 +15,8 @@
 {% set cnt_cancelled   = st.get('cancelled',0) if st else 0 %}
 {% set cnt_draft       = st.get('draft',    0) if st else 0 %}
 {% set can_view_drafts = st.get('can_view_drafts', False) if st else False %}
+{% set cnt_assistant_draft   = st.get('assistant_draft', 0) if st else 0 %}
+{% set can_view_ticket_drafts = st.get('can_view_ticket_drafts', False) if st else False %}
 {% set _status_q       = (request.args.get('status') or '') %}
 {% set _status_parts   = _status_q.split(',') if _status_q else [] %}
 {% set open_nav_active = ep == 'ticketing.ticket_list' and (
@@ -100,6 +102,19 @@
         </span>
         Email drafts
         {% if cnt_draft > 0 %}<span class="sb-badge sb-badge--alert">{{ cnt_draft }}</span>{% endif %}
+      </a>
+      {% endif %}
+
+      {% if can_view_ticket_drafts %}
+      <a href="{{ url_for('ticketing.assistant_draft_tickets') }}"
+         class="sb-nav-item{% if ep == 'ticketing.assistant_draft_tickets' %} active{% endif %}">
+        <span class="sb-nav-icon" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z"/>
+          </svg>
+        </span>
+        Ticket drafts
+        {% if cnt_assistant_draft > 0 %}<span class="sb-badge sb-badge--alert">{{ cnt_assistant_draft }}</span>{% endif %}
       </a>
       {% endif %}
     </div>
