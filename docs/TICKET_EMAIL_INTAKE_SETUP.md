@@ -53,7 +53,9 @@ TICKET_INTAKE_GRAPH_MAILBOX=contact@kynvera.net
 6. Restart the app. Logs should show `Ticket intake Graph poller started`.
 7. Send a new email to `contact@kynvera.net`. Within about a minute it appears
    under **Tickets → Email drafts** (production: https://operations.kynvera.net).
-   Unread mail already in the inbox is also picked up on the first poll.
+   The poller reads recent inbox mail (last 24 hours) and de-duplicates on
+   `Message-Id`, so opening the message in Outlook — or a local app polling the
+   same mailbox — does not stop live from creating the draft.
 
 Recommended lock-down (Exchange Online PowerShell), so the app can read only
 this mailbox:

@@ -2,6 +2,7 @@
 from email.message import EmailMessage
 from unittest.mock import MagicMock, patch
 
+from app.models import TicketEmailIntake, db
 from module_ticketing.inbound_mailbox import (
     graph_settings,
     imap_settings,
@@ -66,7 +67,8 @@ class TestImapSettings:
 
 
 class TestGraphSettings:
-    def test_disabled_without_secret(self, app):
+    def test_disabled_without_secret(self, app, monkeypatch):
+        monkeypatch.setenv('TICKET_INTAKE_GRAPH_CLIENT_SECRET', '')
         app.config['TICKET_INTAKE_GRAPH_TENANT_ID'] = 'tenant'
         app.config['TICKET_INTAKE_GRAPH_CLIENT_ID'] = 'client'
         app.config['TICKET_INTAKE_GRAPH_CLIENT_SECRET'] = ''
@@ -83,7 +85,7 @@ class TestGraphSettings:
 
 
 class TestPollGraphMailbox:
-    def test_unread_message_is_processed_and_marked_read(self, app):
+    def test_recent_message_is_processed_even_if_already_read(self, app):
         app.config['TICKET_INTAKE_GRAPH_TENANT_ID'] = 'tenant-id'
         app.config['TICKET_INTAKE_GRAPH_CLIENT_ID'] = 'client-id'
         app.config['TICKET_INTAKE_GRAPH_CLIENT_SECRET'] = 'client-secret'
@@ -98,7 +100,9 @@ class TestPollGraphMailbox:
         token_resp.raise_for_status.return_value = None
 
         list_resp = MagicMock()
-        list_resp.json.return_value = {'value': [{'id': 'msg-1'}]}
+        list_resp.json.return_value = {
+            'value': [{'id': 'msg-1', 'internetMessageId': '<imap-test-001@example.com>'}]
+        }
         list_resp.raise_for_status.return_value = None
 
         mime_resp = MagicMock()
@@ -109,6 +113,7 @@ class TestPollGraphMailbox:
         patch_resp.raise_for_status.return_value = None
 
         processed = []
+        list_urls = []
 
         def fake_process(intake):
             processed.append(intake)
@@ -120,6 +125,7 @@ class TestPollGraphMailbox:
                 return mime_resp
             if method == 'patch':
                 return patch_resp
+            list_urls.append(url)
             return list_resp
 
         with app.app_context():
@@ -131,16 +137,67 @@ class TestPollGraphMailbox:
 
         assert count == 1
         assert processed[0]['subject'] == 'Tower A - Plumbing issue'
+        assert list_urls
+        assert 'receivedDateTime' in list_urls[0]
+        assert 'isRead' not in list_urls[0]
+
+    def test_already_logged_message_is_skipped(self, app):
+        app.config['TICKET_INTAKE_GRAPH_TENANT_ID'] = 'tenant-id'
+        app.config['TICKET_INTAKE_GRAPH_CLIENT_ID'] = 'client-id'
+        app.config['TICKET_INTAKE_GRAPH_CLIENT_SECRET'] = 'client-secret'
+        app.config['TICKET_INTAKE_GRAPH_MAILBOX'] = 'contact@kynvera.net'
+
+        token_resp = MagicMock()
+        token_resp.json.return_value = {'access_token': 'tok', 'expires_in': 3600}
+        token_resp.raise_for_status.return_value = None
+
+        list_resp = MagicMock()
+        list_resp.json.return_value = {
+            'value': [{'id': 'msg-1', 'internetMessageId': '<already-logged@example.com>'}]
+        }
+        list_resp.raise_for_status.return_value = None
+
+        processed = []
+
+        def fake_request(method, url, **kwargs):
+            if 'oauth2/v2.0/token' in url:
+                return token_resp
+            if url.endswith('/$value'):
+                raise AssertionError('already-logged messages should not be downloaded')
+            return list_resp
+
+        with app.app_context():
+            db.session.add(TicketEmailIntake(
+                from_email='jane@example.com',
+                subject='Already on live',
+                message_id='<already-logged@example.com>',
+                status='processed',
+            ))
+            db.session.commit()
+            with patch('module_ticketing.inbound_mailbox.requests.post', side_effect=lambda *a, **k: fake_request('post', a[0], **k)), \
+                 patch('module_ticketing.inbound_mailbox.requests.get', side_effect=lambda *a, **k: fake_request('get', a[0], **k)), \
+                 patch('module_ticketing.routes._process_inbound_email_intake', side_effect=lambda intake: processed.append(intake)):
+                count = poll_intake_mailbox(app)
+
+        assert count == 0
+        assert processed == []
 
 
 class TestPollIntakeMailbox:
-    def test_no_password_is_noop(self, app):
+    def test_no_password_is_noop(self, app, monkeypatch):
+        monkeypatch.setenv('TICKET_INTAKE_GRAPH_CLIENT_SECRET', '')
+        monkeypatch.setenv('TICKET_INTAKE_IMAP_PASSWORD', '')
         app.config['TICKET_INTAKE_IMAP_PASSWORD'] = ''
         app.config['TICKET_INTAKE_GRAPH_CLIENT_SECRET'] = ''
         with app.app_context():
             assert poll_intake_mailbox(app) == 0
 
     def test_unseen_message_is_processed_and_marked_seen(self, app, monkeypatch):
+        monkeypatch.setenv('TICKET_INTAKE_GRAPH_TENANT_ID', '')
+        monkeypatch.setenv('TICKET_INTAKE_GRAPH_CLIENT_ID', '')
+        monkeypatch.setenv('TICKET_INTAKE_GRAPH_CLIENT_SECRET', '')
+        app.config['TICKET_INTAKE_GRAPH_TENANT_ID'] = ''
+        app.config['TICKET_INTAKE_GRAPH_CLIENT_ID'] = ''
         app.config['TICKET_INTAKE_GRAPH_CLIENT_SECRET'] = ''
         app.config['TICKET_INTAKE_IMAP_PASSWORD'] = 'app-password'
         app.config['TICKET_INTAKE_IMAP_USER'] = 'contact@kynvera.net'

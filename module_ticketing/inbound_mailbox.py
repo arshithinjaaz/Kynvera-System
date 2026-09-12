@@ -15,7 +15,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.header import decode_header
 from email.message import Message
 from email.utils import parseaddr
@@ -38,6 +38,7 @@ _DEFAULT_FOLDER = 'INBOX'
 _DEFAULT_INTERVAL = 60
 _GRAPH_SCOPE = 'https://graph.microsoft.com/.default'
 _GRAPH_BASE = 'https://graph.microsoft.com/v1.0'
+_GRAPH_LOOKBACK_HOURS = 24
 
 
 def _is_testing(app) -> bool:
@@ -203,6 +204,13 @@ def _graph_headers(settings: dict) -> dict:
     return {'Authorization': f'Bearer {_graph_token(settings)}'}
 
 
+def _intake_already_logged(message_id: str | None) -> bool:
+    if not message_id:
+        return False
+    from app.models import TicketEmailIntake
+    return TicketEmailIntake.query.filter_by(message_id=message_id).first() is not None
+
+
 def _poll_graph(app) -> int:
     settings = graph_settings(app)
     if not settings:
@@ -212,9 +220,15 @@ def _poll_graph(app) -> int:
 
     mailbox = quote(settings['mailbox'])
     headers = _graph_headers(settings)
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=_GRAPH_LOOKBACK_HOURS)).strftime(
+        '%Y-%m-%dT%H:%M:%SZ'
+    )
     list_url = (
         f'{_GRAPH_BASE}/users/{mailbox}/mailFolders/inbox/messages'
-        f'?$filter=isRead eq false&$select=id&$top=25'
+        f'?$filter={quote(f"receivedDateTime ge {cutoff}")}'
+        f'&$select=id,internetMessageId'
+        f'&$orderby={quote("receivedDateTime desc")}'
+        f'&$top=25'
     )
     resp = requests.get(list_url, headers=headers, timeout=30)
     resp.raise_for_status()
@@ -224,6 +238,9 @@ def _poll_graph(app) -> int:
         msg_id = item.get('id')
         if not msg_id:
             continue
+        graph_mid = (item.get('internetMessageId') or '').strip() or None
+        if _intake_already_logged(graph_mid):
+            continue
         raw_url = f'{_GRAPH_BASE}/users/{mailbox}/messages/{quote(msg_id, safe="")}/$value'
         try:
             raw_resp = requests.get(raw_url, headers=headers, timeout=30)
@@ -231,10 +248,13 @@ def _poll_graph(app) -> int:
             intake = message_to_intake(email.message_from_bytes(raw_resp.content))
             if not intake.get('to_email'):
                 intake['to_email'] = settings['mailbox']
+            if _intake_already_logged(intake.get('message_id')):
+                continue
             _process_inbound_email_intake(intake)
             processed += 1
         except Exception:
             logger.exception('Ticket intake Graph message failed id=%s', msg_id)
+            continue
         try:
             requests.patch(
                 f'{_GRAPH_BASE}/users/{mailbox}/messages/{quote(msg_id, safe="")}',
@@ -245,7 +265,7 @@ def _poll_graph(app) -> int:
         except Exception:
             logger.warning('Could not mark Graph message read id=%s', msg_id, exc_info=True)
     if processed:
-        logger.info('Ticket intake Graph processed %s unread message(s)', processed)
+        logger.info('Ticket intake Graph processed %s recent message(s)', processed)
     return processed
 
 
@@ -307,7 +327,7 @@ def _poll_imap(app) -> int:
 
 
 def poll_intake_mailbox(app=None) -> int:
-    """Process unread intake mail into draft tickets. Graph first, then IMAP."""
+    """Process recent intake mail into draft tickets. Graph first, then IMAP."""
     try:
         if graph_settings(app):
             return _poll_graph(app)
